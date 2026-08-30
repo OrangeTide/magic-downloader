@@ -39,7 +39,7 @@ type
   TIndexStats = record
     items: LongInt;
     active, preorder, unavailable, removed: LongInt;
-    hidden, blacklisted: LongInt;
+    hidden, blacklisted, superseded: LongInt;
     versions: LongInt;
     downloadedItems: LongInt;   { items with a present file for the current version }
     filesPresent, filesMissing: LongInt;
@@ -77,6 +77,11 @@ type
 
     function ItemExists(const backend, backendId: string): boolean;
     function IsBlacklisted(const backend, backendId: string): boolean;
+
+    {** Records that oldId's entitlement now lives under newId. Both must already
+      exist. The old item keeps its history and files but is skipped by sync. }
+    procedure SetSuperseded(const backend, oldId, newId: string);
+    function IsSuperseded(const backend, backendId: string): boolean;
     procedure SetBlacklist(const backend, backendId: string;
       blacklisted: boolean; const reason: string);
 
@@ -336,6 +341,44 @@ begin
   end;
 end;
 
+procedure TMagicIndex.SetSuperseded(const backend, oldId, newId: string);
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'UPDATE items SET superseded_by=' +
+      '  (SELECT id FROM items WHERE backend=:backend AND backend_id=:newid) ' +
+      'WHERE backend=:backend AND backend_id=:oldid';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('newid').AsString := newId;
+    q.ParamByName('oldid').AsString := oldId;
+    q.ExecSQL;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.IsSuperseded(const backend, backendId: string): boolean;
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT superseded_by FROM items ' +
+      'WHERE backend=:backend AND backend_id=:backend_id';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    IsSuperseded := (not q.EOF) and (not q.Fields[0].IsNull);
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
 procedure TMagicIndex.SetBlacklist(const backend, backendId: string;
   blacklisted: boolean; const reason: string);
 var
@@ -495,6 +538,7 @@ begin
   Result.removed     := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND status=''removed''');
   Result.hidden      := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND hidden=1');
   Result.blacklisted := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND blacklisted=1');
+  Result.superseded  := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND superseded_by IS NOT NULL');
   Result.versions    := ScalarCount(
     'SELECT COUNT(*) FROM versions v JOIN items i ON v.item_id=i.id' + IB);
   Result.filesPresent := ScalarCount(

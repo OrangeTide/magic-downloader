@@ -104,6 +104,7 @@ begin
   Writeln('  status                     Show a summary of the collection state');
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
+  Writeln('  relocate <old> <new>       Record that an item moved to a new id');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
@@ -309,6 +310,11 @@ begin
 
   if ctx.index.IsBlacklisted(backendName, item.id) then begin
     gLog.Debug(Format('  skip blacklisted "%s"', [item.id]));
+    exit;
+  end;
+
+  if ctx.index.IsSuperseded(backendName, item.id) then begin
+    gLog.Debug(Format('  skip superseded "%s"', [item.id]));
     exit;
   end;
 
@@ -555,6 +561,38 @@ begin
   end;
 end;
 
+{** Records a remote id relocation: the old item is superseded by the new one. }
+procedure CmdRelocate;
+var
+  backendName, oldId, newId: string;
+  ids: TStringArray;
+  index: TMagicIndex;
+begin
+  backendName := ArgValue('--backend', '');
+  if FindBackend(backendName) = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backendName]);
+  ids := Positionals(['--backend', '--db']);
+  if Length(ids) <> 2 then
+    raise EMagicError.Create('Usage: relocate --backend X <old-id> <new-id>');
+  oldId := ids[0];
+  newId := ids[1];
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    if not index.ItemExists(backendName, oldId) then
+      raise EMagicError.CreateFmt('Old item "%s" is not indexed.', [oldId]);
+    if not index.ItemExists(backendName, newId) then
+      raise EMagicError.CreateFmt(
+        'New item "%s" is not indexed; index it first.', [newId]);
+    index.SetSuperseded(backendName, oldId, newId);
+    index.Commit;
+    gLog.Info(Format('Relocated %s -> %s.', [oldId, newId]));
+  finally
+    index.Free;
+  end;
+end;
+
 procedure CmdStatus;
 var
   index: TMagicIndex;
@@ -578,6 +616,7 @@ begin
     gLog.Info(Format('    removed:       %d', [st.removed]));
     gLog.Info(Format('  hidden:        %d', [st.hidden]));
     gLog.Info(Format('  blacklisted:   %d', [st.blacklisted]));
+    gLog.Info(Format('  superseded:    %d', [st.superseded]));
     gLog.Info(Format('  versions:      %d', [st.versions]));
     gLog.Info(Format('  downloaded:    %d items (current version)',
       [st.downloadedItems]));
@@ -620,6 +659,7 @@ begin
         'sync': CmdSync;
         'verify': CmdVerify;
         'status': CmdStatus;
+        'relocate': CmdRelocate;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
         '', '-h', '--help', 'help':
