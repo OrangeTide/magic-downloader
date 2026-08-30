@@ -750,48 +750,68 @@ begin
     HumanSize := Format('%.1f %s', [v, UNITS[i]]);
 end;
 
+{** Prints one summary block for the given backend (empty = all), under heading. }
+procedure PrintSummary(index: TMagicIndex; const backend, heading: string);
+var
+  st: TIndexStats;
+  fmts: TFormatCountArray;
+  line: string;
+  i: LongInt;
+begin
+  st := index.Stats(backend);
+  gLog.Info(heading);
+  gLog.Info(Format('  items:         %d', [st.items]));
+  gLog.Info(Format('    active:        %d', [st.active]));
+  gLog.Info(Format('    preorder:      %d', [st.preorder]));
+  gLog.Info(Format('    unavailable:   %d', [st.unavailable]));
+  gLog.Info(Format('    removed:       %d', [st.removed]));
+  gLog.Info(Format('  hidden:        %d', [st.hidden]));
+  gLog.Info(Format('  blacklisted:   %d', [st.blacklisted]));
+  gLog.Info(Format('  superseded:    %d', [st.superseded]));
+  gLog.Info(Format('  versions:      %d', [st.versions]));
+  gLog.Info(Format('  downloaded:    %d items (current version)',
+    [st.downloadedItems]));
+  gLog.Info(Format('  files:         %d present, %d missing',
+    [st.filesPresent, st.filesMissing]));
+  gLog.Info(Format('  size:          %s (present)', [HumanSize(st.bytesPresent)]));
+
+  fmts := index.FormatCounts(backend);
+  if Length(fmts) > 0 then begin
+    gLog.Info('  formats:');
+    for i := 0 to High(fmts) do begin
+      line := Format('%d present', [fmts[i].present]);
+      if fmts[i].missing > 0 then
+        line := line + Format(', %d missing', [fmts[i].missing]);
+      line := line + Format(', %s', [HumanSize(fmts[i].bytes)]);
+      gLog.Info(Format('    %-10s %s', [fmts[i].format, line]));
+    end;
+  end;
+end;
+
 procedure CmdStatus;
 var
   index: TMagicIndex;
-  st: TIndexStats;
-  fmts: TFormatCountArray;
-  backend, scope, line: string;
+  backend: string;
+  backends: TStringArray;
   i: LongInt;
 begin
   backend := ArgValue('--backend', '');
-  if backend = '' then
-    scope := 'all backends'
-  else
-    scope := backend;
-
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
-    st := index.Stats(backend);
-    gLog.Info(Format('Collection status (%s):', [scope]));
-    gLog.Info(Format('  items:         %d', [st.items]));
-    gLog.Info(Format('    active:        %d', [st.active]));
-    gLog.Info(Format('    preorder:      %d', [st.preorder]));
-    gLog.Info(Format('    unavailable:   %d', [st.unavailable]));
-    gLog.Info(Format('    removed:       %d', [st.removed]));
-    gLog.Info(Format('  hidden:        %d', [st.hidden]));
-    gLog.Info(Format('  blacklisted:   %d', [st.blacklisted]));
-    gLog.Info(Format('  superseded:    %d', [st.superseded]));
-    gLog.Info(Format('  versions:      %d', [st.versions]));
-    gLog.Info(Format('  downloaded:    %d items (current version)',
-      [st.downloadedItems]));
-    gLog.Info(Format('  files:         %d present, %d missing',
-      [st.filesPresent, st.filesMissing]));
-    gLog.Info(Format('  size:          %s (present)', [HumanSize(st.bytesPresent)]));
-
-    fmts := index.FormatCounts(backend);
-    if Length(fmts) > 0 then begin
-      gLog.Info('  formats:');
-      for i := 0 to High(fmts) do begin
-        line := Format('%d present', [fmts[i].present]);
-        if fmts[i].missing > 0 then
-          line := line + Format(', %d missing', [fmts[i].missing]);
-        line := line + Format(', %s', [HumanSize(fmts[i].bytes)]);
-        gLog.Info(Format('    %-10s %s', [fmts[i].format, line]));
+    if backend <> '' then
+      PrintSummary(index, backend, Format('Collection status (%s):', [backend]))
+    else begin
+      backends := index.Backends;
+      if Length(backends) <= 1 then
+        PrintSummary(index, '', 'Collection status (all backends):')
+      else begin
+        gLog.Info('Collection status:');
+        for i := 0 to High(backends) do begin
+          gLog.Info('');
+          PrintSummary(index, backends[i], backends[i] + ':');
+        end;
+        gLog.Info('');
+        PrintSummary(index, '', 'all backends:');
       end;
     end;
   finally

@@ -152,6 +152,9 @@ type
 
     function CountItems(const backend: string): LongInt;
 
+    {** Distinct backend names present in the index, ordered. }
+    function Backends: TStringArray;
+
     {** Aggregate collection state, for the given backend or all when empty. }
     function Stats(const backend: string): TIndexStats;
 
@@ -567,6 +570,26 @@ begin
     q.ParamByName('backend').AsString := backend;
     q.Open;
     CountItems := q.Fields[0].AsInteger;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.Backends: TStringArray;
+var
+  q: TSQLQuery;
+begin
+  Backends := nil;
+  q := NewQuery;
+  try
+    q.SQL.Text := 'SELECT DISTINCT backend FROM items ORDER BY backend';
+    q.Open;
+    while not q.EOF do begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := q.Fields[0].AsString;
+      q.Next;
+    end;
     q.Close;
   finally
     q.Free;
