@@ -128,7 +128,8 @@ begin
   Writeln('  --downloaded               List filter: only downloaded items');
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
-  Writeln('  --json                     Machine-readable output (status/list/details/verify)');
+  Writeln('  --json                     Machine-readable output (status/list/details/');
+  Writeln('                             verify/blacklist/allow)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -595,10 +596,14 @@ end;
   arguments. Blacklisted items are skipped by sync. }
 procedure SetBlacklistForIds(blacklist: boolean; const reason: string);
 var
-  backendName: string;
+  backendName, action: string;
   ids: TStringArray;
   index: TMagicIndex;
   i, changed: LongInt;
+  jsonMode: boolean;
+  changedIds, notIndexed: TStringList;
+  root: TJSONObject;
+  arr: TJSONArray;
 begin
   backendName := ArgValue('--backend', '');
   if FindBackend(backendName) = nil then
@@ -607,25 +612,54 @@ begin
   ids := Positionals(['--backend', '--db', '--reason']);
   if Length(ids) = 0 then
     raise EMagicError.Create('Give at least one item id.');
+  jsonMode := HasFlag('--json');
+  if blacklist then action := 'blacklist' else action := 'allow';
 
+  changedIds := TStringList.Create;
+  notIndexed := TStringList.Create;
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
     changed := 0;
     for i := 0 to High(ids) do begin
       if not index.ItemExists(backendName, ids[i]) then begin
-        gLog.Warn(Format('item "%s" is not indexed; run index first', [ids[i]]));
+        notIndexed.Add(ids[i]);
+        if not jsonMode then
+          gLog.Warn(Format('item "%s" is not indexed; run index first',
+            [ids[i]]));
         continue;
       end;
       index.SetBlacklist(backendName, ids[i], blacklist, reason);
+      changedIds.Add(ids[i]);
       Inc(changed);
     end;
     index.Commit;
-    if blacklist then
+
+    if jsonMode then begin
+      root := TJSONObject.Create;
+      try
+        root.Add('action', action);
+        root.Add('changed', changed);
+        arr := TJSONArray.Create;
+        for i := 0 to changedIds.Count - 1 do
+          arr.Add(changedIds[i]);
+        root.Add('ids', arr);
+        arr := TJSONArray.Create;
+        for i := 0 to notIndexed.Count - 1 do
+          arr.Add(notIndexed[i]);
+        root.Add('not_indexed', arr);
+        Writeln(root.FormatJSON);
+      finally
+        root.Free;
+      end;
+    end
+    else if blacklist then
       gLog.Info(Format('Blacklisted %d item(s).', [changed]))
     else
       gLog.Info(Format('Allowed %d item(s).', [changed]));
   finally
     index.Free;
+    changedIds.Free;
+    notIndexed.Free;
   end;
 end;
 
