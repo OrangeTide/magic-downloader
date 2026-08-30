@@ -6,3 +6,4 @@
 *.sqlite-wal
 *.sqlite-shm
 /downloads/
+.appkey*
