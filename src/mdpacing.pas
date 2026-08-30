@@ -24,37 +24,43 @@ uses
 
 const
   { ---- Retry delays ---- }
+  { These defaults are deliberately conservative. Bandcamp's abuse protection is
+    quick to trip and slow to forgive: once it starts refusing, it keeps doing so
+    for a while and can escalate to a JS challenge. It is far cheaper to run
+    slowly than to get rate limited, so the baseline is gentle, the backoff on a
+    429 is long, and the recovery afterward is slow. Override with --interval-ms
+    when a specific account tolerates more. }
 
   {** Delay before the first retry of a request that failed for an ordinary
     reason. }
-  RETRY_BASE_DELAY_MS: Int64 = 1000;
+  RETRY_BASE_DELAY_MS: Int64 = 2000;
 
   {** Delay before the first retry of a request rejected with HTTP 429. The
     server keeps refusing for a while after a burst, so a short pause only wastes
     retries. }
-  RATE_LIMIT_BASE_DELAY_MS: Int64 = 30000;
+  RATE_LIMIT_BASE_DELAY_MS: Int64 = 60000;
 
   {** Upper bound of the exponential backoff, so a long collection cannot stall
     forever. }
-  RETRY_MAX_DELAY_MS: Int64 = 300000;
+  RETRY_MAX_DELAY_MS: Int64 = 900000;
 
   {** Random share of the computed delay added to it, so parallel jobs do not all
     resume at the same instant and trip the rate limiting again. }
-  RETRY_JITTER_RATIO: Double = 0.25;
+  RETRY_JITTER_RATIO: Double = 0.5;
 
   { ---- Inter-request pacing ---- }
 
   {** Shortest delay applied between two requests, whatever the pacing. }
-  MIN_REQUEST_INTERVAL_MS: Int64 = 100;
+  MIN_REQUEST_INTERVAL_MS: Int64 = 500;
 
   {** Default minimum delay between two requests. Sending them back to back trips
     the rate limiting even when few items are downloaded. }
-  DEFAULT_REQUEST_INTERVAL_MS: Int64 = 1000;
+  DEFAULT_REQUEST_INTERVAL_MS: Int64 = 3000;
 
   {** The listing requests (collection pages) are cheap and happen once per run,
     so they use a fraction of the normal delay. Sending them with no delay at all
     is still enough to be rate limited on a large collection. }
-  LIGHT_PACING_DIVISOR: Int64 = 10;
+  LIGHT_PACING_DIVISOR: Int64 = 3;
 
   {** Factor applied to the inter-request delay on every 429. The sustainable
     pace is searched for by slowing down until the errors stop. }
@@ -62,14 +68,14 @@ const
 
   {** Upper bound of the inter-request delay, so the search cannot stall the
     download completely. }
-  MAX_REQUEST_INTERVAL_MS: Int64 = 60000;
+  MAX_REQUEST_INTERVAL_MS: Int64 = 120000;
 
   {** Successful requests required before the delay is reduced again. }
-  REQUESTS_BEFORE_SPEEDING_UP: LongInt = 20;
+  REQUESTS_BEFORE_SPEEDING_UP: LongInt = 50;
 
   {** Share of the delay kept when speeding up. Recovery is slower than growth on
     purpose. }
-  REQUEST_INTERVAL_RECOVERY_RATIO: Double = 0.8;
+  REQUEST_INTERVAL_RECOVERY_RATIO: Double = 0.9;
 
   { ---- Relevant HTTP status codes ---- }
 

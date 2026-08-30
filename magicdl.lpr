@@ -130,7 +130,8 @@ begin
   Writeln('  --limit <n>                Cap the number of items listed');
   Writeln('  --json                     Machine-readable output (status/list/details/');
   Writeln('                             verify/blacklist/allow/relocate)');
-  Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
+  Writeln(Format('  --interval-ms <n>          Base delay between requests (default %d)',
+    [DEFAULT_REQUEST_INTERVAL_MS]));
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
   Writeln('  --skip-hidden              Skip hidden collection items');
