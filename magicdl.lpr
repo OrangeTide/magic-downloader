@@ -129,7 +129,7 @@ begin
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
   Writeln('  --json                     Machine-readable output (status/list/details/');
-  Writeln('                             verify/blacklist/allow)');
+  Writeln('                             verify/blacklist/allow/relocate)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -669,6 +669,7 @@ var
   backendName, oldId, newId: string;
   ids: TStringArray;
   index: TMagicIndex;
+  root: TJSONObject;
 begin
   backendName := ArgValue('--backend', '');
   if FindBackend(backendName) = nil then
@@ -689,7 +690,19 @@ begin
         'New item "%s" is not indexed; index it first.', [newId]);
     index.SetSuperseded(backendName, oldId, newId);
     index.Commit;
-    gLog.Info(Format('Relocated %s -> %s.', [oldId, newId]));
+    if HasFlag('--json') then begin
+      root := TJSONObject.Create;
+      try
+        root.Add('action', 'relocate');
+        root.Add('from', oldId);
+        root.Add('to', newId);
+        Writeln(root.FormatJSON);
+      finally
+        root.Free;
+      end;
+    end
+    else
+      gLog.Info(Format('Relocated %s -> %s.', [oldId, newId]));
   finally
     index.Free;
   end;
