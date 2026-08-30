@@ -66,6 +66,13 @@ type
   end;
   TIndexedItemArray = array of TIndexedItem;
 
+  {** Present/missing file counts for one format. }
+  TFormatCount = record
+    format: string;
+    present, missing: LongInt;
+  end;
+  TFormatCountArray = array of TFormatCount;
+
   {** One item's full stored state. }
   TItemDetail = record
     backend, backendId, kind, title, creator, pageUrl, coverUrl, status: string;
@@ -145,6 +152,9 @@ type
 
     {** Aggregate collection state, for the given backend or all when empty. }
     function Stats(const backend: string): TIndexStats;
+
+    {** File counts grouped by format, for the given backend or all when empty. }
+    function FormatCounts(const backend: string): TFormatCountArray;
 
     {** Items matching the filter, ordered by backend then id. }
     function ListItems(const f: TItemFilter): TIndexedItemArray;
@@ -603,6 +613,38 @@ begin
     'SELECT COUNT(DISTINCT i.id) FROM items i ' +
     'JOIN versions v ON v.item_id=i.id JOIN files f ON f.version_id=v.id' +
     IB + ' AND v.is_current=1 AND f.state=''present''');
+end;
+
+function TMagicIndex.FormatCounts(const backend: string): TFormatCountArray;
+var
+  q: TSQLQuery;
+  n: LongInt;
+begin
+  FormatCounts := nil;
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT f.format, ' +
+      '  SUM(CASE WHEN f.state=''present'' THEN 1 ELSE 0 END) AS present, ' +
+      '  SUM(CASE WHEN f.state=''missing'' THEN 1 ELSE 0 END) AS missing ' +
+      'FROM files f JOIN versions v ON f.version_id=v.id ' +
+      'JOIN items i ON v.item_id=i.id ' +
+      'WHERE (:backend='''' OR i.backend=:backend) ' +
+      'GROUP BY f.format ORDER BY f.format';
+    q.ParamByName('backend').AsString := backend;
+    q.Open;
+    while not q.EOF do begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].format := q.FieldByName('format').AsString;
+      Result[n].present := q.FieldByName('present').AsInteger;
+      Result[n].missing := q.FieldByName('missing').AsInteger;
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
 end;
 
 function TMagicIndex.ListItems(const f: TItemFilter): TIndexedItemArray;

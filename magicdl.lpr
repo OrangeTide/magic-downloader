@@ -734,7 +734,9 @@ procedure CmdStatus;
 var
   index: TMagicIndex;
   st: TIndexStats;
-  backend, scope: string;
+  fmts: TFormatCountArray;
+  backend, scope, line: string;
+  i: LongInt;
 begin
   backend := ArgValue('--backend', '');
   if backend = '' then
@@ -759,6 +761,17 @@ begin
       [st.downloadedItems]));
     gLog.Info(Format('  files:         %d present, %d missing',
       [st.filesPresent, st.filesMissing]));
+
+    fmts := index.FormatCounts(backend);
+    if Length(fmts) > 0 then begin
+      gLog.Info('  formats:');
+      for i := 0 to High(fmts) do begin
+        line := Format('%d present', [fmts[i].present]);
+        if fmts[i].missing > 0 then
+          line := line + Format(', %d missing', [fmts[i].missing]);
+        gLog.Info(Format('    %-10s %s', [fmts[i].format, line]));
+      end;
+    end;
   finally
     index.Free;
   end;
