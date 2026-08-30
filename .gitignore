@@ -1,0 +1,8 @@
+/build/
+*.o
+*.ppu
+*.compiled
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/downloads/
