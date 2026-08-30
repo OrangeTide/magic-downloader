@@ -22,6 +22,7 @@ type
     cookies: TCookieJar;
     index: TMagicIndex;
     user: string;          { store account/user name, backend interpreted }
+    apiKey: string;        { API/application key, for token-auth backends }
     outputDir: string;
     audioFormat: string;   { preferred audio format, e.g. flac }
     skipHidden: boolean;

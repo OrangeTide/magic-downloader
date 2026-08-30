@@ -12,7 +12,8 @@ program magicdl;
 uses
   Classes, SysUtils, contnrs, fpjson,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
-  mdbackend_bandcamp;  { registers the bandcamp backend }
+  mdbackend_bandcamp,      { registers the bandcamp backend }
+  mdbackend_drivethrurpg;  { registers the drivethrurpg backend }
 
 const
   APP_VERSION = 'v0.0.1-skeleton';
@@ -110,7 +111,8 @@ begin
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
-  Writeln('  --user <name>              Store account/user name');
+  Writeln('  --user <name>              Store account/user name (bandcamp)');
+  Writeln('  --app-key <key>            Application key (drivethrurpg)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
   Writeln('                             Manager JSON, or Netscape cookies.txt)');
   Writeln('  --firefox                  Load cookies from Firefox profiles');
@@ -156,6 +158,7 @@ begin
   Result.cookies := cookies;
   Result.index := index;
   Result.user := ArgValue('--user', '');
+  Result.apiKey := ArgValue('--app-key', '');
   Result.outputDir := ArgValue('--out', 'downloads');
   Result.audioFormat := ArgValue('--format', 'flac');
   Result.skipHidden := HasFlag('--skip-hidden');

@@ -23,6 +23,7 @@ type
     fCookies: TCookieJar;
     fRetries: LongInt;
     fTimeoutMs: LongInt;
+    fAuthHeader: string;   { sent as Authorization when non-empty }
     {** Runs one request, writing the response body to respStream and returning
       the HTTP status code. Reports the server's suggested filename (from
       Content-Disposition) in contentDisposition. Raises only for transport
@@ -38,6 +39,9 @@ type
   public
     constructor Create(aLog: TMagicLogger; aPacer: TPacer; aCookies: TCookieJar;
       aRetries: LongInt; aTimeoutMs: LongInt);
+    {** Sets an Authorization header value sent on every request (empty clears
+      it). Used by token-authenticated backends. }
+    procedure SetAuthHeader(const value: string);
     function Get(const url: string; pacing: TPacing = pcNormal): string;
     function PostJson(const url, jsonBody: string;
       pacing: TPacing = pcNormal): string;
@@ -175,6 +179,8 @@ begin
     client.IOTimeout := fTimeoutMs;
     if (fCookies <> nil) and (fCookies.Count > 0) then
       client.AddHeader('Cookie', fCookies.HeaderValue);
+    if fAuthHeader <> '' then
+      client.AddHeader('Authorization', fAuthHeader);
     if requestBody <> '' then begin
       client.AddHeader('Content-Type', 'application/json');
       reqStream := TStringStream.Create(requestBody);
@@ -260,6 +266,11 @@ begin
   finally
     buf.Free;
   end;
+end;
+
+procedure TMagicHttp.SetAuthHeader(const value: string);
+begin
+  fAuthHeader := value;
 end;
 
 function TMagicHttp.Get(const url: string; pacing: TPacing): string;
