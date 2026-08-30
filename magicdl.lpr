@@ -128,7 +128,7 @@ begin
   Writeln('  --downloaded               List filter: only downloaded items');
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
-  Writeln('  --json                     Machine-readable output (status)');
+  Writeln('  --json                     Machine-readable output (status/list/details)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -603,6 +603,65 @@ begin
   end;
 end;
 
+{** Emits one item's full detail (metadata, versions, nested files) as JSON. }
+procedure DetailsJson(const item: TItemDetail;
+  const versions: TVersionInfoArray; const files: TFileInfoArray);
+var
+  root, vo, fo: TJSONObject;
+  varr, farr: TJSONArray;
+  i, j: LongInt;
+begin
+  root := TJSONObject.Create;
+  try
+    root.Add('backend', item.backend);
+    root.Add('id', item.backendId);
+    root.Add('kind', item.kind);
+    root.Add('title', item.title);
+    root.Add('creator', item.creator);
+    root.Add('page_url', item.pageUrl);
+    root.Add('cover_url', item.coverUrl);
+    root.Add('status', item.status);
+    root.Add('hidden', item.hidden);
+    root.Add('blacklisted', item.blacklisted);
+    root.Add('blacklist_reason', item.blacklistReason);
+    if item.supersededBy = '' then
+      root.Add('superseded_by', TJSONNull.Create)
+    else
+      root.Add('superseded_by', item.supersededBy);
+    root.Add('first_seen', item.firstSeen);
+    root.Add('last_seen', item.lastSeen);
+
+    varr := TJSONArray.Create;
+    for i := 0 to High(versions) do begin
+      vo := TJSONObject.Create;
+      vo.Add('version_key', versions[i].versionKey);
+      vo.Add('released_at', versions[i].releasedAt);
+      vo.Add('current', versions[i].isCurrent);
+      vo.Add('first_seen', versions[i].firstSeen);
+      vo.Add('last_seen', versions[i].lastSeen);
+      farr := TJSONArray.Create;
+      for j := 0 to High(files) do
+        if files[j].versionKey = versions[i].versionKey then begin
+          fo := TJSONObject.Create;
+          fo.Add('format', files[j].format);
+          fo.Add('size', files[j].size);
+          fo.Add('state', files[j].state);
+          fo.Add('sha256', files[j].sha256);
+          fo.Add('path', files[j].path);
+          fo.Add('downloaded_at', files[j].downloadedAt);
+          fo.Add('checked_at', files[j].checkedAt);
+          farr.Add(fo);
+        end;
+      vo.Add('files', farr);
+      varr.Add(vo);
+    end;
+    root.Add('versions', varr);
+    Writeln(root.FormatJSON);
+  finally
+    root.Free;
+  end;
+end;
+
 procedure CmdDetails;
 var
   index: TMagicIndex;
@@ -628,6 +687,14 @@ begin
     if not index.GetItem(backend, id, item) then
       raise EMagicError.CreateFmt('Item "%s" is not indexed.', [id]);
 
+    versions := index.ItemVersions(backend, id);
+    files := index.ItemFiles(backend, id);
+
+    if HasFlag('--json') then begin
+      DetailsJson(item, versions, files);
+      exit;
+    end;
+
     gLog.Info(Format('Item %s (%s)', [item.backendId, item.backend]));
     gLog.Info(Format('  title:      %s', [item.title]));
     gLog.Info(Format('  creator:    %s', [item.creator]));
@@ -649,8 +716,6 @@ begin
     gLog.Info(Format('  first seen: %s', [item.firstSeen]));
     gLog.Info(Format('  last seen:  %s', [item.lastSeen]));
 
-    versions := index.ItemVersions(backend, id);
-    files := index.ItemFiles(backend, id);
     if Length(versions) = 0 then begin
       gLog.Info('  versions:   (none resolved yet)');
       exit;
@@ -670,6 +735,38 @@ begin
     end;
   finally
     index.Free;
+  end;
+end;
+
+{** Emits a filtered item list as JSON. }
+procedure ListItemsJson(const items: TIndexedItemArray);
+var
+  root: TJSONObject;
+  arr: TJSONArray;
+  o: TJSONObject;
+  i: LongInt;
+begin
+  root := TJSONObject.Create;
+  try
+    arr := TJSONArray.Create;
+    for i := 0 to High(items) do begin
+      o := TJSONObject.Create;
+      o.Add('id', items[i].backendId);
+      o.Add('kind', items[i].kind);
+      o.Add('title', items[i].title);
+      o.Add('creator', items[i].creator);
+      o.Add('status', items[i].status);
+      o.Add('hidden', items[i].hidden);
+      o.Add('blacklisted', items[i].blacklisted);
+      o.Add('superseded', items[i].superseded);
+      o.Add('downloaded', items[i].downloaded);
+      arr.Add(o);
+    end;
+    root.Add('count', Length(items));
+    root.Add('items', arr);
+    Writeln(root.FormatJSON);
+  finally
+    root.Free;
   end;
 end;
 
@@ -703,6 +800,12 @@ begin
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
     items := index.ListItems(f);
+
+    if HasFlag('--json') then begin
+      ListItemsJson(items);
+      exit;
+    end;
+
     if Length(items) = 0 then begin
       gLog.Info('No items match.');
       exit;
