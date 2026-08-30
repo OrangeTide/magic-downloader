@@ -535,6 +535,7 @@ begin
                 [missingFiles[i].path, found]));
             Inc(repaired);
             Dec(missing);
+            Inc(present);  { relocated file is now present at its new path }
           end
           else
             stillMissing.Add(missingFiles[i].path);
