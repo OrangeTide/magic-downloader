@@ -45,6 +45,27 @@ type
     filesPresent, filesMissing: LongInt;
   end;
 
+  TDownloadedFilter = (dfAny, dfYes, dfNo);
+
+  {** Criteria for listing items. Empty strings and dfAny mean "no constraint". }
+  TItemFilter = record
+    backend: string;
+    status: string;
+    onlyHidden: boolean;
+    onlyBlacklisted: boolean;
+    onlySuperseded: boolean;
+    downloaded: TDownloadedFilter;
+    format: string;      { format for the downloaded test; empty = any }
+    limit: LongInt;      { 0 = no limit }
+  end;
+
+  {** One item row with derived flags, for listing. }
+  TIndexedItem = record
+    backendId, kind, title, creator, status: string;
+    hidden, blacklisted, superseded, downloaded: boolean;
+  end;
+  TIndexedItemArray = array of TIndexedItem;
+
   {** A file row joined with its owning version and item, for verification. }
   TIndexedFile = record
     id: Int64;
@@ -102,6 +123,9 @@ type
 
     {** Aggregate collection state, for the given backend or all when empty. }
     function Stats(const backend: string): TIndexStats;
+
+    {** Items matching the filter, ordered by backend then id. }
+    function ListItems(const f: TItemFilter): TIndexedItemArray;
 
     {** All recorded files, for the given backend or every backend when empty. }
     function AllFiles(const backend: string): TIndexedFileArray;
@@ -551,6 +575,76 @@ begin
     'SELECT COUNT(DISTINCT i.id) FROM items i ' +
     'JOIN versions v ON v.item_id=i.id JOIN files f ON f.version_id=v.id' +
     IB + ' AND v.is_current=1 AND f.state=''present''');
+end;
+
+function TMagicIndex.ListItems(const f: TItemFilter): TIndexedItemArray;
+var
+  q: TSQLQuery;
+  sql, fmtClause, dlExpr: string;
+  n: LongInt;
+begin
+  ListItems := nil;
+
+  { A present file for the item's current version, optionally in a set format. }
+  if f.format <> '' then
+    fmtClause := ' AND fl.format=:format'
+  else
+    fmtClause := '';
+  dlExpr :=
+    '(EXISTS(SELECT 1 FROM versions v JOIN files fl ON fl.version_id=v.id ' +
+    'WHERE v.item_id=i.id AND v.is_current=1 AND fl.state=''present''' +
+    fmtClause + '))';
+
+  sql :=
+    'SELECT i.backend_id, i.kind, i.title, i.creator, i.status, i.hidden, ' +
+    '       i.blacklisted, (i.superseded_by IS NOT NULL) AS sup, ' +
+    dlExpr + ' AS dl ' +
+    'FROM items i WHERE (:backend='''' OR i.backend=:backend)';
+  if f.status <> '' then
+    sql := sql + ' AND i.status=:status';
+  if f.onlyHidden then
+    sql := sql + ' AND i.hidden=1';
+  if f.onlyBlacklisted then
+    sql := sql + ' AND i.blacklisted=1';
+  if f.onlySuperseded then
+    sql := sql + ' AND i.superseded_by IS NOT NULL';
+  case f.downloaded of
+    dfYes: sql := sql + ' AND ' + dlExpr;
+    dfNo:  sql := sql + ' AND NOT ' + dlExpr;
+  end;
+  sql := sql + ' ORDER BY i.backend, i.backend_id';
+  if f.limit > 0 then
+    sql := sql + ' LIMIT :limit';
+
+  q := NewQuery;
+  try
+    q.SQL.Text := sql;
+    q.ParamByName('backend').AsString := f.backend;
+    if f.status <> '' then
+      q.ParamByName('status').AsString := f.status;
+    if f.format <> '' then
+      q.ParamByName('format').AsString := f.format;
+    if f.limit > 0 then
+      q.ParamByName('limit').AsInteger := f.limit;
+    q.Open;
+    while not q.EOF do begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].backendId := q.FieldByName('backend_id').AsString;
+      Result[n].kind := q.FieldByName('kind').AsString;
+      Result[n].title := q.FieldByName('title').AsString;
+      Result[n].creator := q.FieldByName('creator').AsString;
+      Result[n].status := q.FieldByName('status').AsString;
+      Result[n].hidden := q.FieldByName('hidden').AsInteger <> 0;
+      Result[n].blacklisted := q.FieldByName('blacklisted').AsInteger <> 0;
+      Result[n].superseded := q.FieldByName('sup').AsInteger <> 0;
+      Result[n].downloaded := q.FieldByName('dl').AsInteger <> 0;
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
 end;
 
 function TMagicIndex.AllFiles(const backend: string): TIndexedFileArray;

@@ -102,6 +102,7 @@ begin
   Writeln('  sync                       Download new items');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
   Writeln('  status                     Show a summary of the collection state');
+  Writeln('  list                       List items, with filters (see below)');
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
@@ -119,6 +120,13 @@ begin
   Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
   Writeln('  --rescan                   Relocate moved files by content hash (verify)');
   Writeln('  --reason <text>            Note why an item is blacklisted');
+  Writeln('  --status <s>               Filter list by status (active/removed/...)');
+  Writeln('  --hidden                   List filter: only hidden items');
+  Writeln('  --blacklisted              List filter: only blacklisted items');
+  Writeln('  --superseded               List filter: only relocated items');
+  Writeln('  --downloaded               List filter: only downloaded items');
+  Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
+  Writeln('  --limit <n>                Cap the number of items listed');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -593,6 +601,64 @@ begin
   end;
 end;
 
+procedure CmdList;
+var
+  index: TMagicIndex;
+  f: TItemFilter;
+  items: TIndexedItemArray;
+  i: LongInt;
+  flags, dl, name: string;
+begin
+  f.backend := ArgValue('--backend', '');
+  f.status := ArgValue('--status', '');
+  if (f.status <> '') and (f.status <> ITEM_ACTIVE)
+    and (f.status <> ITEM_REMOVED) and (f.status <> ITEM_PREORDER)
+    and (f.status <> ITEM_UNAVAILABLE) then
+    raise EMagicError.CreateFmt(
+      'Unknown status "%s" (active|removed|preorder|unavailable).', [f.status]);
+  f.onlyHidden := HasFlag('--hidden');
+  f.onlyBlacklisted := HasFlag('--blacklisted');
+  f.onlySuperseded := HasFlag('--superseded');
+  if HasFlag('--downloaded') then
+    f.downloaded := dfYes
+  else if HasFlag('--not-downloaded') then
+    f.downloaded := dfNo
+  else
+    f.downloaded := dfAny;
+  f.format := ArgValue('--format', '');
+  f.limit := StrToIntDef(ArgValue('--limit', ''), 0);
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    items := index.ListItems(f);
+    if Length(items) = 0 then begin
+      gLog.Info('No items match.');
+      exit;
+    end;
+    gLog.Info(Format('%-3s %-11s %-3s %s', ['DL', 'STATUS', 'HBS', 'ITEM']));
+    for i := 0 to High(items) do begin
+      if items[i].downloaded then dl := ' * ' else dl := ' . ';
+      flags := '';
+      if items[i].hidden then flags := flags + 'H' else flags := flags + '-';
+      if items[i].blacklisted then flags := flags + 'B' else flags := flags + '-';
+      if items[i].superseded then flags := flags + 'S' else flags := flags + '-';
+      if (items[i].creator <> '') and (items[i].title <> '') then
+        name := items[i].creator + ' - ' + items[i].title
+      else if items[i].title <> '' then
+        name := items[i].title
+      else if items[i].creator <> '' then
+        name := items[i].creator
+      else
+        name := '(no title)';
+      gLog.Info(Format('%-3s %-11s %-3s %s  [%s]',
+        [dl, items[i].status, flags, name, items[i].backendId]));
+    end;
+    gLog.Info(Format('%d item(s).', [Length(items)]));
+  finally
+    index.Free;
+  end;
+end;
+
 procedure CmdStatus;
 var
   index: TMagicIndex;
@@ -659,6 +725,7 @@ begin
         'sync': CmdSync;
         'verify': CmdVerify;
         'status': CmdStatus;
+        'list': CmdList;
         'relocate': CmdRelocate;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
