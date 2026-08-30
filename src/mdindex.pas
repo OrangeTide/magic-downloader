@@ -35,6 +35,13 @@ const
   ITEM_UNAVAILABLE = 'unavailable';
 
 type
+  {** A file row joined with its owning version and item, for verification. }
+  TIndexedFile = record
+    id: Int64;
+    backend, backendId, versionKey, format, path, sha256, state: string;
+  end;
+  TIndexedFileArray = array of TIndexedFile;
+
   TMagicIndex = class
   private
     fConn: TSQLite3Connection;
@@ -76,6 +83,12 @@ type
       path: string; size: Int64; const sha256, downloadedAt: string);
 
     function CountItems(const backend: string): LongInt;
+
+    {** All recorded files, for the given backend or every backend when empty. }
+    function AllFiles(const backend: string): TIndexedFileArray;
+
+    procedure SetFileState(fileId: Int64; const state, checkedAt: string);
+    procedure UpdateFilePath(fileId: Int64; const newPath, checkedAt: string);
 
     procedure Commit;
   end;
@@ -416,6 +429,78 @@ begin
     q.Open;
     CountItems := q.Fields[0].AsInteger;
     q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.AllFiles(const backend: string): TIndexedFileArray;
+var
+  q: TSQLQuery;
+  n: LongInt;
+begin
+  AllFiles := nil;
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT f.id, i.backend, i.backend_id, v.version_key, f.format, ' +
+      '       f.path, f.sha256, f.state ' +
+      'FROM files f ' +
+      'JOIN versions v ON f.version_id=v.id ' +
+      'JOIN items i ON v.item_id=i.id ' +
+      'WHERE (:backend='''' OR i.backend=:backend) ' +
+      'ORDER BY f.id';
+    q.ParamByName('backend').AsString := backend;
+    q.Open;
+    while not q.EOF do begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].id := q.FieldByName('id').AsLargeInt;
+      Result[n].backend := q.FieldByName('backend').AsString;
+      Result[n].backendId := q.FieldByName('backend_id').AsString;
+      Result[n].versionKey := q.FieldByName('version_key').AsString;
+      Result[n].format := q.FieldByName('format').AsString;
+      Result[n].path := q.FieldByName('path').AsString;
+      Result[n].sha256 := q.FieldByName('sha256').AsString;
+      Result[n].state := q.FieldByName('state').AsString;
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+procedure TMagicIndex.SetFileState(fileId: Int64; const state, checkedAt: string);
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text := 'UPDATE files SET state=:state, checked_at=:dt WHERE id=:id';
+    q.ParamByName('state').AsString := state;
+    q.ParamByName('dt').AsString := checkedAt;
+    q.ParamByName('id').AsLargeInt := fileId;
+    q.ExecSQL;
+  finally
+    q.Free;
+  end;
+end;
+
+procedure TMagicIndex.UpdateFilePath(fileId: Int64;
+  const newPath, checkedAt: string);
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'UPDATE files SET path=:path, state=''present'', checked_at=:dt ' +
+      'WHERE id=:id';
+    q.ParamByName('path').AsString := newPath;
+    q.ParamByName('dt').AsString := checkedAt;
+    q.ParamByName('id').AsLargeInt := fileId;
+    q.ExecSQL;
   finally
     q.Free;
   end;

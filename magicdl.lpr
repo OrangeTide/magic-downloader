@@ -10,7 +10,7 @@ program magicdl;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, SysUtils,
+  Classes, SysUtils, contnrs,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdbackend_bandcamp;  { registers the bandcamp backend }
 
@@ -69,6 +69,7 @@ begin
   Writeln('  list-backends              List available backends');
   Writeln('  index                      Index a collection (no downloads)');
   Writeln('  sync                       Download new items');
+  Writeln('  verify                     Check downloaded files, relocate moved ones');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
@@ -80,6 +81,8 @@ begin
   Writeln('  --out <dir>                Output directory (default ./downloads)');
   Writeln('  --format <fmt>             Preferred audio format (default flac)');
   Writeln('  --covers                   Also download cover images (sync)');
+  Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
+  Writeln('  --rescan                   Relocate moved files by content hash (verify)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -381,6 +384,104 @@ begin
   end;
 end;
 
+{** Recursively hashes every file under dir into map (sha256 -> path). Used to
+  relocate files that were moved or renamed on disk. }
+procedure ScanDirHashes(const dir: string; map: TFPStringHashTable);
+var
+  info: TSearchRec;
+  full: string;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faAnyFile, info) <> 0 then
+    exit;
+  try
+    repeat
+      if (info.Name = '.') or (info.Name = '..') then
+        continue;
+      full := IncludeTrailingPathDelimiter(dir) + info.Name;
+      if (info.Attr and faDirectory) <> 0 then
+        ScanDirHashes(full, map)
+      else
+        map[Sha256File(full)] := full;
+    until FindNext(info) <> 0;
+  finally
+    FindClose(info);
+  end;
+end;
+
+procedure CmdVerify;
+var
+  index: TMagicIndex;
+  files, missingFiles: TIndexedFileArray;
+  backend, scanDir, seen, found: string;
+  rehash, rescan: boolean;
+  i, present, missing, repaired, mismatched: LongInt;
+  map: TFPStringHashTable;
+begin
+  backend := ArgValue('--backend', '');
+  rehash := HasFlag('--rehash');
+  rescan := HasFlag('--rescan');
+  scanDir := ArgValue('--out', 'downloads');
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    files := index.AllFiles(backend);
+    present := 0; missing := 0; repaired := 0; mismatched := 0;
+    missingFiles := nil;
+    seen := NowIsoUtc;
+
+    { Pass 1: presence, and optional integrity check of present files. }
+    for i := 0 to High(files) do begin
+      if FileExists(files[i].path) then begin
+        if rehash and (files[i].sha256 <> '') then
+          if Sha256File(files[i].path) <> files[i].sha256 then begin
+            Inc(mismatched);
+            gLog.Warn(Format('hash mismatch: %s', [files[i].path]));
+          end;
+        index.SetFileState(files[i].id, 'present', seen);
+        Inc(present);
+      end
+      else begin
+        index.SetFileState(files[i].id, 'missing', seen);
+        SetLength(missingFiles, Length(missingFiles) + 1);
+        missingFiles[High(missingFiles)] := files[i];
+        Inc(missing);
+      end;
+    end;
+    index.Commit;
+
+    { Pass 2: repair moved/renamed files by matching content hash. }
+    if rescan and (missing > 0) and DirectoryExists(scanDir) then begin
+      gLog.Info(Format('Rescanning %s to relocate %d missing file(s)...',
+        [scanDir, missing]));
+      map := TFPStringHashTable.Create;
+      try
+        ScanDirHashes(scanDir, map);
+        seen := NowIsoUtc;
+        for i := 0 to High(missingFiles) do begin
+          if missingFiles[i].sha256 = '' then
+            continue;
+          found := map[missingFiles[i].sha256];
+          if (found <> '') and FileExists(found) then begin
+            index.UpdateFilePath(missingFiles[i].id, found, seen);
+            gLog.Info(Format('  relocated: %s -> %s',
+              [missingFiles[i].path, found]));
+            Inc(repaired);
+            Dec(missing);
+          end;
+        end;
+        index.Commit;
+      finally
+        map.Free;
+      end;
+    end;
+
+    gLog.Info(Format('Verify: %d present, %d missing, %d relocated, %d mismatched.',
+      [present, missing, repaired, mismatched]));
+  finally
+    index.Free;
+  end;
+end;
+
 { ---- Main ---- }
 
 var
@@ -401,6 +502,7 @@ begin
         'list-backends': CmdListBackends;
         'index': CmdIndex;
         'sync': CmdSync;
+        'verify': CmdVerify;
         '', '-h', '--help', 'help':
           PrintUsage;
         else begin
