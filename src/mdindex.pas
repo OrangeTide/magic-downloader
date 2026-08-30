@@ -65,6 +65,7 @@ type
 
     procedure SetItemStatus(const backend, backendId, status: string);
 
+    function ItemExists(const backend, backendId: string): boolean;
     function IsBlacklisted(const backend, backendId: string): boolean;
     procedure SetBlacklist(const backend, backendId: string;
       blacklisted: boolean; const reason: string);
@@ -280,6 +281,24 @@ begin
     q.ParamByName('backend').AsString := backend;
     q.ParamByName('backend_id').AsString := backendId;
     q.ExecSQL;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.ItemExists(const backend, backendId: string): boolean;
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT 1 FROM items WHERE backend=:backend AND backend_id=:backend_id';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    ItemExists := not q.EOF;
+    q.Close;
   finally
     q.Free;
   end;

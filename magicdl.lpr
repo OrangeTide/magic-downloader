@@ -56,6 +56,37 @@ begin
   HasFlag := false;
 end;
 
+{** Returns the positional arguments after the command word: everything that is
+  not an option (--x) and not the value consumed by a value-taking option named
+  in valueOpts. }
+function Positionals(const valueOpts: array of string): TStringArray;
+var
+  i, j: LongInt;
+  arg: string;
+  isValueOpt: boolean;
+begin
+  Positionals := nil;
+  i := 2;  { skip program name (0) and command (1) }
+  while i <= ParamCount do begin
+    arg := ParamStr(i);
+    if Copy(arg, 1, 2) = '--' then begin
+      isValueOpt := false;
+      for j := 0 to High(valueOpts) do
+        if arg = valueOpts[j] then begin
+          isValueOpt := true;
+          break;
+        end;
+      if isValueOpt then
+        Inc(i);  { also skip its value }
+    end
+    else begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := arg;
+    end;
+    Inc(i);
+  end;
+end;
+
 procedure PrintUsage;
 var
   names: TStringArray;
@@ -70,6 +101,8 @@ begin
   Writeln('  index                      Index a collection (no downloads)');
   Writeln('  sync                       Download new items');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
+  Writeln('  blacklist <id>...          Mark items so sync skips them');
+  Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
@@ -83,6 +116,7 @@ begin
   Writeln('  --covers                   Also download cover images (sync)');
   Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
   Writeln('  --rescan                   Relocate moved files by content hash (verify)');
+  Writeln('  --reason <text>            Note why an item is blacklisted');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -482,6 +516,54 @@ begin
   end;
 end;
 
+{** Sets or clears the blacklist flag on the item ids given as positional
+  arguments. Blacklisted items are skipped by sync. }
+procedure SetBlacklistForIds(blacklist: boolean; const reason: string);
+var
+  backendName: string;
+  ids: TStringArray;
+  index: TMagicIndex;
+  i, changed: LongInt;
+begin
+  backendName := ArgValue('--backend', '');
+  if FindBackend(backendName) = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backendName]);
+  ids := Positionals(['--backend', '--db', '--reason']);
+  if Length(ids) = 0 then
+    raise EMagicError.Create('Give at least one item id.');
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    changed := 0;
+    for i := 0 to High(ids) do begin
+      if not index.ItemExists(backendName, ids[i]) then begin
+        gLog.Warn(Format('item "%s" is not indexed; run index first', [ids[i]]));
+        continue;
+      end;
+      index.SetBlacklist(backendName, ids[i], blacklist, reason);
+      Inc(changed);
+    end;
+    index.Commit;
+    if blacklist then
+      gLog.Info(Format('Blacklisted %d item(s).', [changed]))
+    else
+      gLog.Info(Format('Allowed %d item(s).', [changed]));
+  finally
+    index.Free;
+  end;
+end;
+
+procedure CmdBlacklist;
+begin
+  SetBlacklistForIds(true, ArgValue('--reason', ''));
+end;
+
+procedure CmdAllow;
+begin
+  SetBlacklistForIds(false, '');
+end;
+
 { ---- Main ---- }
 
 var
@@ -503,6 +585,8 @@ begin
         'index': CmdIndex;
         'sync': CmdSync;
         'verify': CmdVerify;
+        'blacklist': CmdBlacklist;
+        'allow': CmdAllow;
         '', '-h', '--help', 'help':
           PrintUsage;
         else begin
