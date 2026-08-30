@@ -66,6 +66,28 @@ type
   end;
   TIndexedItemArray = array of TIndexedItem;
 
+  {** One item's full stored state. }
+  TItemDetail = record
+    backend, backendId, kind, title, creator, pageUrl, coverUrl, status: string;
+    hidden, blacklisted: boolean;
+    blacklistReason, supersededBy: string;
+    firstSeen, lastSeen: string;
+  end;
+
+  {** One version row for an item. }
+  TVersionInfo = record
+    versionKey, releasedAt, firstSeen, lastSeen: string;
+    isCurrent: boolean;
+  end;
+  TVersionInfoArray = array of TVersionInfo;
+
+  {** One file row with full detail, grouped under its version_key. }
+  TFileInfo = record
+    versionKey, format, path, sha256, state, downloadedAt, checkedAt: string;
+    size: Int64;
+  end;
+  TFileInfoArray = array of TFileInfo;
+
   {** A file row joined with its owning version and item, for verification. }
   TIndexedFile = record
     id: Int64;
@@ -126,6 +148,12 @@ type
 
     {** Items matching the filter, ordered by backend then id. }
     function ListItems(const f: TItemFilter): TIndexedItemArray;
+
+    {** One item's full record; false when it does not exist. }
+    function GetItem(const backend, backendId: string;
+      out item: TItemDetail): boolean;
+    function ItemVersions(const backend, backendId: string): TVersionInfoArray;
+    function ItemFiles(const backend, backendId: string): TFileInfoArray;
 
     {** All recorded files, for the given backend or every backend when empty. }
     function AllFiles(const backend: string): TIndexedFileArray;
@@ -639,6 +667,121 @@ begin
       Result[n].blacklisted := q.FieldByName('blacklisted').AsInteger <> 0;
       Result[n].superseded := q.FieldByName('sup').AsInteger <> 0;
       Result[n].downloaded := q.FieldByName('dl').AsInteger <> 0;
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.GetItem(const backend, backendId: string;
+  out item: TItemDetail): boolean;
+var
+  q: TSQLQuery;
+begin
+  item := Default(TItemDetail);
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT i.backend, i.backend_id, i.kind, i.title, i.creator, ' +
+      '       i.page_url, i.cover_url, i.status, i.hidden, i.blacklisted, ' +
+      '       i.blacklist_reason, i.first_seen, i.last_seen, ' +
+      '       n.backend_id AS superseded_by_id ' +
+      'FROM items i LEFT JOIN items n ON i.superseded_by=n.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    GetItem := not q.EOF;
+    if not q.EOF then begin
+      item.backend := q.FieldByName('backend').AsString;
+      item.backendId := q.FieldByName('backend_id').AsString;
+      item.kind := q.FieldByName('kind').AsString;
+      item.title := q.FieldByName('title').AsString;
+      item.creator := q.FieldByName('creator').AsString;
+      item.pageUrl := q.FieldByName('page_url').AsString;
+      item.coverUrl := q.FieldByName('cover_url').AsString;
+      item.status := q.FieldByName('status').AsString;
+      item.hidden := q.FieldByName('hidden').AsInteger <> 0;
+      item.blacklisted := q.FieldByName('blacklisted').AsInteger <> 0;
+      item.blacklistReason := q.FieldByName('blacklist_reason').AsString;
+      item.supersededBy := q.FieldByName('superseded_by_id').AsString;
+      item.firstSeen := q.FieldByName('first_seen').AsString;
+      item.lastSeen := q.FieldByName('last_seen').AsString;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.ItemVersions(const backend,
+  backendId: string): TVersionInfoArray;
+var
+  q: TSQLQuery;
+  n: LongInt;
+begin
+  ItemVersions := nil;
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT v.version_key, v.released_at, v.is_current, v.first_seen, ' +
+      '       v.last_seen ' +
+      'FROM versions v JOIN items i ON v.item_id=i.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
+      'ORDER BY v.is_current DESC, v.version_key';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    while not q.EOF do begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].versionKey := q.FieldByName('version_key').AsString;
+      Result[n].releasedAt := q.FieldByName('released_at').AsString;
+      Result[n].isCurrent := q.FieldByName('is_current').AsInteger <> 0;
+      Result[n].firstSeen := q.FieldByName('first_seen').AsString;
+      Result[n].lastSeen := q.FieldByName('last_seen').AsString;
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.ItemFiles(const backend,
+  backendId: string): TFileInfoArray;
+var
+  q: TSQLQuery;
+  n: LongInt;
+begin
+  ItemFiles := nil;
+  q := NewQuery;
+  try
+    { size cast to text so a large file size is not truncated by a 32-bit
+      field mapping (see the cookie expiry note). }
+    q.SQL.Text :=
+      'SELECT v.version_key, f.format, f.path, CAST(f.size AS TEXT) AS size_txt, ' +
+      '       f.sha256, f.state, f.downloaded_at, f.checked_at ' +
+      'FROM files f JOIN versions v ON f.version_id=v.id ' +
+      'JOIN items i ON v.item_id=i.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
+      'ORDER BY v.version_key, f.format';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    while not q.EOF do begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].versionKey := q.FieldByName('version_key').AsString;
+      Result[n].format := q.FieldByName('format').AsString;
+      Result[n].path := q.FieldByName('path').AsString;
+      Result[n].size := StrToInt64Def(q.FieldByName('size_txt').AsString, 0);
+      Result[n].sha256 := q.FieldByName('sha256').AsString;
+      Result[n].state := q.FieldByName('state').AsString;
+      Result[n].downloadedAt := q.FieldByName('downloaded_at').AsString;
+      Result[n].checkedAt := q.FieldByName('checked_at').AsString;
       q.Next;
     end;
     q.Close;

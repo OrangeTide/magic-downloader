@@ -103,6 +103,7 @@ begin
   Writeln('  verify                     Check downloaded files, relocate moved ones');
   Writeln('  status                     Show a summary of the collection state');
   Writeln('  list                       List items, with filters (see below)');
+  Writeln('  details <id>               Show one item''s versions and files');
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
@@ -601,6 +602,76 @@ begin
   end;
 end;
 
+procedure CmdDetails;
+var
+  index: TMagicIndex;
+  backend, id: string;
+  ids: TStringArray;
+  item: TItemDetail;
+  versions: TVersionInfoArray;
+  files: TFileInfoArray;
+  i, j: LongInt;
+  line, cur: string;
+begin
+  backend := ArgValue('--backend', '');
+  if FindBackend(backend) = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backend]);
+  ids := Positionals(['--backend', '--db']);
+  if Length(ids) <> 1 then
+    raise EMagicError.Create('Usage: details --backend X <item-id>');
+  id := ids[0];
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    if not index.GetItem(backend, id, item) then
+      raise EMagicError.CreateFmt('Item "%s" is not indexed.', [id]);
+
+    gLog.Info(Format('Item %s (%s)', [item.backendId, item.backend]));
+    gLog.Info(Format('  title:      %s', [item.title]));
+    gLog.Info(Format('  creator:    %s', [item.creator]));
+    gLog.Info(Format('  kind:       %s', [item.kind]));
+    line := item.status;
+    if item.hidden then line := line + ', hidden';
+    if item.blacklisted then begin
+      line := line + ', blacklisted';
+      if item.blacklistReason <> '' then
+        line := line + ' (' + item.blacklistReason + ')';
+    end;
+    if item.supersededBy <> '' then
+      line := line + ', superseded by ' + item.supersededBy;
+    gLog.Info(Format('  status:     %s', [line]));
+    if item.pageUrl <> '' then
+      gLog.Info(Format('  page:       %s', [item.pageUrl]));
+    if item.coverUrl <> '' then
+      gLog.Info(Format('  cover:      %s', [item.coverUrl]));
+    gLog.Info(Format('  first seen: %s', [item.firstSeen]));
+    gLog.Info(Format('  last seen:  %s', [item.lastSeen]));
+
+    versions := index.ItemVersions(backend, id);
+    files := index.ItemFiles(backend, id);
+    if Length(versions) = 0 then begin
+      gLog.Info('  versions:   (none resolved yet)');
+      exit;
+    end;
+
+    gLog.Info('  versions:');
+    for i := 0 to High(versions) do begin
+      if versions[i].isCurrent then cur := ' (current)' else cur := '';
+      gLog.Info(Format('    %s%s  released %s  seen %s .. %s',
+        [versions[i].versionKey, cur, versions[i].releasedAt,
+         versions[i].firstSeen, versions[i].lastSeen]));
+      for j := 0 to High(files) do
+        if files[j].versionKey = versions[i].versionKey then
+          gLog.Info(Format('      %-8s %d bytes  %-7s  %s  -> %s',
+            [files[j].format, files[j].size, files[j].state,
+             files[j].sha256, files[j].path]));
+    end;
+  finally
+    index.Free;
+  end;
+end;
+
 procedure CmdList;
 var
   index: TMagicIndex;
@@ -726,6 +797,7 @@ begin
         'verify': CmdVerify;
         'status': CmdStatus;
         'list': CmdList;
+        'details': CmdDetails;
         'relocate': CmdRelocate;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
