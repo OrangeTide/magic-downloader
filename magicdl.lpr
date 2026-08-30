@@ -112,7 +112,8 @@ begin
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
   Writeln('  --user <name>              Store account/user name (bandcamp)');
-  Writeln('  --app-key <key>            Application key (drivethrurpg)');
+  Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the file form');
+  Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
   Writeln('                             Manager JSON, or Netscape cookies.txt)');
   Writeln('  --firefox                  Load cookies from Firefox profiles');
@@ -149,6 +150,23 @@ end;
 
 { ---- Context assembly ---- }
 
+{** Reads an application key from a file, trimmed of surrounding whitespace, so
+  the secret never appears on the command line. }
+function ReadKeyFile(const path: string): string;
+var
+  sl: TStringList;
+begin
+  if not FileExists(path) then
+    raise EMagicError.CreateFmt('Key file "%s" not found.', [path]);
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(path);
+    ReadKeyFile := Trim(sl.Text);
+  finally
+    sl.Free;
+  end;
+end;
+
 function BuildContext(index: TMagicIndex; cookies: TCookieJar;
   http: TMagicHttp): TMagicContext;
 begin
@@ -159,6 +177,9 @@ begin
   Result.index := index;
   Result.user := ArgValue('--user', '');
   Result.apiKey := ArgValue('--app-key', '');
+  { Prefer a key file so the secret is not exposed in the process command line. }
+  if (Result.apiKey = '') and (ArgValue('--app-key-file', '') <> '') then
+    Result.apiKey := ReadKeyFile(ArgValue('--app-key-file', ''));
   Result.outputDir := ArgValue('--out', 'downloads');
   Result.audioFormat := ArgValue('--format', 'flac');
   Result.skipHidden := HasFlag('--skip-hidden');
