@@ -10,7 +10,7 @@ program magicdl;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, SysUtils, contnrs,
+  Classes, SysUtils, contnrs, fpjson,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdbackend_bandcamp;  { registers the bandcamp backend }
 
@@ -128,6 +128,7 @@ begin
   Writeln('  --downloaded               List filter: only downloaded items');
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
+  Writeln('  --json                     Machine-readable output (status)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -788,6 +789,78 @@ begin
   end;
 end;
 
+{** Builds one backend's stats as a JSON object (name labels the scope). }
+function StatsToJson(index: TMagicIndex;
+  const backend, name: string): TJSONObject;
+var
+  st: TIndexStats;
+  fmts: TFormatCountArray;
+  items, files, fo: TJSONObject;
+  arr: TJSONArray;
+  i: LongInt;
+begin
+  st := index.Stats(backend);
+  Result := TJSONObject.Create;
+  Result.Add('backend', name);
+
+  items := TJSONObject.Create;
+  items.Add('total', st.items);
+  items.Add('active', st.active);
+  items.Add('preorder', st.preorder);
+  items.Add('unavailable', st.unavailable);
+  items.Add('removed', st.removed);
+  Result.Add('items', items);
+
+  Result.Add('hidden', st.hidden);
+  Result.Add('blacklisted', st.blacklisted);
+  Result.Add('superseded', st.superseded);
+  Result.Add('versions', st.versions);
+  Result.Add('downloaded_items', st.downloadedItems);
+
+  files := TJSONObject.Create;
+  files.Add('present', st.filesPresent);
+  files.Add('missing', st.filesMissing);
+  Result.Add('files', files);
+  Result.Add('bytes_present', st.bytesPresent);
+
+  arr := TJSONArray.Create;
+  fmts := index.FormatCounts(backend);
+  for i := 0 to High(fmts) do begin
+    fo := TJSONObject.Create;
+    fo.Add('format', fmts[i].format);
+    fo.Add('present', fmts[i].present);
+    fo.Add('missing', fmts[i].missing);
+    fo.Add('bytes', fmts[i].bytes);
+    arr.Add(fo);
+  end;
+  Result.Add('formats', arr);
+end;
+
+procedure StatusJson(index: TMagicIndex; const backend: string);
+var
+  root: TJSONObject;
+  arr: TJSONArray;
+  backends: TStringArray;
+  i: LongInt;
+begin
+  root := TJSONObject.Create;
+  try
+    arr := TJSONArray.Create;
+    if backend <> '' then
+      arr.Add(StatsToJson(index, backend, backend))
+    else begin
+      backends := index.Backends;
+      for i := 0 to High(backends) do
+        arr.Add(StatsToJson(index, backends[i], backends[i]));
+    end;
+    root.Add('backends', arr);
+    root.Add('total', StatsToJson(index, backend, 'all'));
+    Writeln(root.FormatJSON);
+  finally
+    root.Free;  { frees the whole tree }
+  end;
+end;
+
 procedure CmdStatus;
 var
   index: TMagicIndex;
@@ -798,6 +871,11 @@ begin
   backend := ArgValue('--backend', '');
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
+    if HasFlag('--json') then begin
+      StatusJson(index, backend);
+      exit;
+    end;
+
     if backend <> '' then
       PrintSummary(index, backend, Format('Collection status (%s):', [backend]))
     else begin
