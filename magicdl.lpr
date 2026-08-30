@@ -100,7 +100,7 @@ begin
   Writeln('Commands:');
   Writeln('  list-backends              List available backends');
   Writeln('  index                      Index a collection (no downloads)');
-  Writeln('  sync                       Download new items');
+  Writeln('  sync [<id>...]             Download new items (ids restrict to those)');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
   Writeln('  status                     Show a summary of the collection state');
   Writeln('  list                       List items, with filters (see below)');
@@ -307,18 +307,35 @@ begin
   end;
 end;
 
-{** Downloads one item: the archive, and its cover when --covers is set. Records
-  the version and file in the index. Honors --dry-run. Returns true when
+{** A display name for an item's download folder. }
+function ItemDisplayName(const item: TCollectionItem): string;
+begin
+  if (item.artist <> '') and (item.title <> '') then
+    ItemDisplayName := item.artist + ' - ' + item.title
+  else if item.title <> '' then
+    ItemDisplayName := item.title
+  else if item.artist <> '' then
+    ItemDisplayName := item.artist
+  else
+    ItemDisplayName := item.id;
+end;
+
+{** Downloads an item's files (a Bandcamp archive, or each of a DriveThruRPG
+  product's files) into one folder, plus its cover when --covers is set. Records
+  the version and each file in the index. Honors --dry-run. Returns true when
   something was fetched (or would have been, under dry-run). }
 function SyncItem(backend: TMagicBackend; const ctx: TMagicContext;
   const backendName: string; const item: TCollectionItem;
   withCovers: boolean): boolean;
 var
-  target: TDownloadTarget;
-  available: boolean;
-  itemDir, baseName, coverUrl, savedPath, sha, seen: string;
+  targets: TDownloadTargetArray;
+  availability: TAvailability;
+  named: TCollectionItem;
+  i: LongInt;
+  itemDir, coverUrl, savedPath, sha, seen, fileName: string;
   fs: TFileStream;
   fileSize: Int64;
+  fetchedAny: boolean;
 begin
   SyncItem := false;
   seen := NowIsoUtc;
@@ -333,72 +350,88 @@ begin
     exit;
   end;
 
-  available := backend.ResolveDownload(item, target);
+  targets := backend.ResolveFiles(item, availability);
 
-  { Record the version whenever one was identified, even for a preorder, so the
-    index tracks it before it becomes downloadable. }
-  if target.versionKey <> '' then
-    ctx.index.UpsertVersion(backendName, item.id, target.versionKey,
-      target.releasedAt, seen);
-
-  if not available then begin
-    case target.availability of
-      avPreorder:
-        begin
-          ctx.index.SetItemStatus(backendName, item.id, ITEM_PREORDER);
-          gLog.Info(Format('  preorder "%s - %s": not released yet',
-            [target.artist, target.title]));
-        end;
-      else
-        begin
-          ctx.index.SetItemStatus(backendName, item.id, ITEM_UNAVAILABLE);
-          gLog.Info(Format('  skip "%s": nothing downloadable in %s',
-            [item.id, ctx.audioFormat]));
-        end;
+  if (availability <> avAvailable) or (Length(targets) = 0) then begin
+    if availability = avPreorder then begin
+      ctx.index.SetItemStatus(backendName, item.id, ITEM_PREORDER);
+      gLog.Info(Format('  preorder "%s": not released yet',
+        [ItemDisplayName(item)]));
+    end
+    else begin
+      ctx.index.SetItemStatus(backendName, item.id, ITEM_UNAVAILABLE);
+      gLog.Info(Format('  skip "%s": nothing downloadable', [item.id]));
     end;
     ctx.index.Commit;
     exit;
   end;
 
-  { Already have this exact version and format. }
-  if ctx.index.HasPresentFile(backendName, item.id, target.versionKey,
-    target.format) then
-    exit;
+  { Fold the resolved names back into the item, then record the version (all
+    files of an item share it). }
+  named := item;
+  if targets[0].artist <> '' then named.artist := targets[0].artist;
+  if targets[0].title <> '' then named.title := targets[0].title;
+  ctx.index.UpsertItem(backendName, named, seen);
+  ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
+    targets[0].releasedAt, seen);
 
-  baseName := SanitizeName(target.suggestedName);
-  itemDir := IncludeTrailingPathDelimiter(ctx.outputDir) + baseName;
+  itemDir := IncludeTrailingPathDelimiter(ctx.outputDir) +
+    SanitizeName(ItemDisplayName(named));
 
-  if ctx.dryRun then begin
-    gLog.Info(Format('  would download "%s" -> %s',
-      [target.suggestedName, itemDir]));
-    SyncItem := true;
-    exit;
+  fetchedAny := false;
+  for i := 0 to High(targets) do begin
+    { Already have this exact file for this version. }
+    if ctx.index.HasPresentFile(backendName, item.id, targets[i].versionKey,
+      targets[i].name) then
+      continue;
+
+    if ctx.dryRun then begin
+      gLog.Info(Format('  would download "%s" -> %s',
+        [targets[i].suggestedName, itemDir]));
+      fetchedAny := true;
+      continue;
+    end;
+
+    fileName := SanitizeName(targets[i].suggestedName);
+    gLog.Info(Format('  downloading "%s"...', [targets[i].suggestedName]));
+    savedPath := ctx.http.Download(targets[i].downloadUrl, itemDir, fileName,
+      pcNormal);
+
+    sha := Sha256File(savedPath);
+    fs := TFileStream.Create(savedPath, fmOpenRead or fmShareDenyNone);
+    try
+      fileSize := fs.Size;
+    finally
+      fs.Free;
+    end;
+
+    ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
+      targets[i].name, targets[i].format, savedPath, fileSize, sha, seen);
+    fetchedAny := true;
   end;
 
-  gLog.Info(Format('  downloading "%s"...', [target.suggestedName]));
-  savedPath := ctx.http.Download(target.downloadUrl, itemDir, baseName + '.zip',
-    pcNormal);
-
-  { Hash and size the file for move detection and integrity. }
-  sha := Sha256File(savedPath);
-  fs := TFileStream.Create(savedPath, fmOpenRead or fmShareDenyNone);
-  try
-    fileSize := fs.Size;
-  finally
-    fs.Free;
-  end;
-
-  if withCovers then begin
+  if fetchedAny and (not ctx.dryRun) and withCovers then begin
     coverUrl := backend.ResolveCoverUrl(item);
     if coverUrl <> '' then
       ctx.http.Download(coverUrl, itemDir, 'cover.jpg', pcNormal);
   end;
 
-  ctx.index.RecordFile(backendName, item.id, target.versionKey, target.format,
-    savedPath, fileSize, sha, seen);
   ctx.index.SetItemStatus(backendName, item.id, ITEM_ACTIVE);
   ctx.index.Commit;
-  SyncItem := true;
+  SyncItem := fetchedAny;
+end;
+
+{** True when only is empty (no restriction) or id is listed in it. }
+function IdAllowed(const id: string; const only: TStringArray): boolean;
+var
+  i: LongInt;
+begin
+  if Length(only) = 0 then
+    exit(true);
+  for i := 0 to High(only) do
+    if only[i] = id then
+      exit(true);
+  IdAllowed := false;
 end;
 
 procedure CmdSync;
@@ -408,12 +441,16 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
+  only: TStringArray;
   i, fetched: LongInt;
   withCovers: boolean;
   backendName: string;
 begin
   backendClass := RequireBackend(backendName);
   withCovers := HasFlag('--covers');
+  { Optional positional item ids restrict the sync to just those items. }
+  only := Positionals(['--backend', '--db', '--out', '--format', '--user',
+    '--app-key', '--interval-ms', '--retries', '--timeout-ms']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http);
@@ -429,8 +466,9 @@ begin
 
       fetched := 0;
       for i := 0 to High(items) do
-        if SyncItem(backend, ctx, backendName, items[i], withCovers) then
-          Inc(fetched);
+        if IdAllowed(items[i].id, only) then
+          if SyncItem(backend, ctx, backendName, items[i], withCovers) then
+            Inc(fetched);
       gLog.Info(Format('Sync done: %d fetched.', [fetched]));
     finally
       backend.Free;
@@ -752,6 +790,7 @@ begin
       for j := 0 to High(files) do
         if files[j].versionKey = versions[i].versionKey then begin
           fo := TJSONObject.Create;
+          fo.Add('name', files[j].name);
           fo.Add('format', files[j].format);
           fo.Add('size', files[j].size);
           fo.Add('state', files[j].state);
@@ -838,9 +877,9 @@ begin
          versions[i].firstSeen, versions[i].lastSeen]));
       for j := 0 to High(files) do
         if files[j].versionKey = versions[i].versionKey then
-          gLog.Info(Format('      %-8s %d bytes  %-7s  %s  -> %s',
-            [files[j].format, files[j].size, files[j].state,
-             files[j].sha256, files[j].path]));
+          gLog.Info(Format('      %s  (%s, %d bytes, %s)  -> %s',
+            [files[j].name, files[j].format, files[j].size, files[j].state,
+             files[j].path]));
     end;
   finally
     index.Free;

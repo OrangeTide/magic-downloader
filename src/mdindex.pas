@@ -26,7 +26,7 @@ uses
   Classes, SysUtils, DateUtils, sqldb, sqlite3conn, db, mdtypes;
 
 const
-  SCHEMA_VERSION = 2;
+  SCHEMA_VERSION = 3;
 
   { Item lifecycle status values. }
   ITEM_ACTIVE      = 'active';
@@ -92,7 +92,7 @@ type
 
   {** One file row with full detail, grouped under its version_key. }
   TFileInfo = record
-    versionKey, format, path, sha256, state, downloadedAt, checkedAt: string;
+    versionKey, name, format, path, sha256, state, downloadedAt, checkedAt: string;
     size: Int64;
   end;
   TFileInfoArray = array of TFileInfo;
@@ -142,12 +142,13 @@ type
     procedure UpsertVersion(const backend, backendId, versionKey, releasedAt,
       seenAt: string);
 
-    {** True when a present local file exists for this version and format. }
+    {** True when a present local file with this name exists for this version. }
     function HasPresentFile(const backend, backendId, versionKey,
-      format: string): boolean;
+      name: string): boolean;
 
-    {** Records a downloaded file for a version and format. }
-    procedure RecordFile(const backend, backendId, versionKey, format,
+    {** Records a downloaded file (name is its identity within the version,
+      format is the type hint). }
+    procedure RecordFile(const backend, backendId, versionKey, name, format,
       path: string; size: Int64; const sha256, downloadedAt: string);
 
     function CountItems(const backend: string): LongInt;
@@ -244,8 +245,11 @@ begin
   if SchemaVersion >= SCHEMA_VERSION then
     exit;
 
-  { The v1 index was a single flat table and holds only a rebuildable cache, so
-    it is dropped rather than migrated. Re-running index or sync repopulates it. }
+  { The index holds only a rebuildable cache, so an out-of-date schema is dropped
+    and recreated rather than migrated. Re-running index or sync repopulates it.
+    Children are dropped before parents for the foreign keys. }
+  fConn.ExecuteDirect('DROP TABLE IF EXISTS files');
+  fConn.ExecuteDirect('DROP TABLE IF EXISTS versions');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS items');
 
   fConn.ExecuteDirect(
@@ -278,18 +282,22 @@ begin
     '  last_seen     TEXT NOT NULL,' +
     '  UNIQUE (item_id, version_key))');
 
+  { name is the file's identity within a version (a Bandcamp archive uses its
+    format, e.g. flac; a DriveThruRPG file uses its filename), so a product with
+    several files fits. format is the type hint (flac, pdf, zip). }
   fConn.ExecuteDirect(
     'CREATE TABLE files (' +
     '  id            INTEGER PRIMARY KEY,' +
     '  version_id    INTEGER NOT NULL REFERENCES versions(id) ON DELETE CASCADE,' +
-    '  format        TEXT NOT NULL,' +
+    '  name          TEXT NOT NULL,' +
+    '  format        TEXT,' +
     '  path          TEXT NOT NULL,' +
     '  size          INTEGER,' +
     '  sha256        TEXT,' +
     '  state         TEXT NOT NULL DEFAULT ''present'',' +
     '  downloaded_at TEXT NOT NULL,' +
     '  checked_at    TEXT,' +
-    '  UNIQUE (version_id, format))');
+    '  UNIQUE (version_id, name))');
 
   fConn.ExecuteDirect(
     'CREATE INDEX ix_items_backend_status ON items(backend, status)');
@@ -503,7 +511,7 @@ begin
 end;
 
 function TMagicIndex.HasPresentFile(const backend, backendId, versionKey,
-  format: string): boolean;
+  name: string): boolean;
 var
   q: TSQLQuery;
 begin
@@ -514,12 +522,12 @@ begin
       'JOIN versions v ON f.version_id=v.id ' +
       'JOIN items i ON v.item_id=i.id ' +
       'WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
-      '  AND v.version_key=:vk AND f.format=:fmt AND f.state=''present'' ' +
+      '  AND v.version_key=:vk AND f.name=:name AND f.state=''present'' ' +
       'LIMIT 1';
     q.ParamByName('backend').AsString := backend;
     q.ParamByName('backend_id').AsString := backendId;
     q.ParamByName('vk').AsString := versionKey;
-    q.ParamByName('fmt').AsString := format;
+    q.ParamByName('name').AsString := name;
     q.Open;
     HasPresentFile := not q.EOF;
     q.Close;
@@ -528,27 +536,28 @@ begin
   end;
 end;
 
-procedure TMagicIndex.RecordFile(const backend, backendId, versionKey, format,
-  path: string; size: Int64; const sha256, downloadedAt: string);
+procedure TMagicIndex.RecordFile(const backend, backendId, versionKey, name,
+  format, path: string; size: Int64; const sha256, downloadedAt: string);
 var
   q: TSQLQuery;
 begin
   q := NewQuery;
   try
     q.SQL.Text :=
-      'INSERT INTO files (version_id, format, path, size, sha256, state, ' +
+      'INSERT INTO files (version_id, name, format, path, size, sha256, state, ' +
       ' downloaded_at, checked_at) ' +
       'VALUES ((SELECT v.id FROM versions v JOIN items i ON v.item_id=i.id ' +
       '         WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
       '         AND v.version_key=:vk), ' +
-      ' :fmt, :path, :size, :sha, ''present'', :dt, :dt) ' +
-      'ON CONFLICT(version_id, format) DO UPDATE SET ' +
-      '  path=excluded.path, size=excluded.size, sha256=excluded.sha256, ' +
-      '  state=''present'', downloaded_at=excluded.downloaded_at, ' +
-      '  checked_at=excluded.checked_at';
+      ' :name, :fmt, :path, :size, :sha, ''present'', :dt, :dt) ' +
+      'ON CONFLICT(version_id, name) DO UPDATE SET ' +
+      '  format=excluded.format, path=excluded.path, size=excluded.size, ' +
+      '  sha256=excluded.sha256, state=''present'', ' +
+      '  downloaded_at=excluded.downloaded_at, checked_at=excluded.checked_at';
     q.ParamByName('backend').AsString := backend;
     q.ParamByName('backend_id').AsString := backendId;
     q.ParamByName('vk').AsString := versionKey;
+    q.ParamByName('name').AsString := name;
     q.ParamByName('fmt').AsString := format;
     q.ParamByName('path').AsString := path;
     q.ParamByName('size').AsLargeInt := size;
@@ -854,12 +863,13 @@ begin
     { size cast to text so a large file size is not truncated by a 32-bit
       field mapping (see the cookie expiry note). }
     q.SQL.Text :=
-      'SELECT v.version_key, f.format, f.path, CAST(f.size AS TEXT) AS size_txt, ' +
+      'SELECT v.version_key, f.name, f.format, f.path, ' +
+      '       CAST(f.size AS TEXT) AS size_txt, ' +
       '       f.sha256, f.state, f.downloaded_at, f.checked_at ' +
       'FROM files f JOIN versions v ON f.version_id=v.id ' +
       'JOIN items i ON v.item_id=i.id ' +
       'WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
-      'ORDER BY v.version_key, f.format';
+      'ORDER BY v.version_key, f.name';
     q.ParamByName('backend').AsString := backend;
     q.ParamByName('backend_id').AsString := backendId;
     q.Open;
@@ -867,6 +877,7 @@ begin
       n := Length(Result);
       SetLength(Result, n + 1);
       Result[n].versionKey := q.FieldByName('version_key').AsString;
+      Result[n].name := q.FieldByName('name').AsString;
       Result[n].format := q.FieldByName('format').AsString;
       Result[n].path := q.FieldByName('path').AsString;
       Result[n].size := StrToInt64Def(q.FieldByName('size_txt').AsString, 0);

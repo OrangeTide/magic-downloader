@@ -59,10 +59,12 @@ type
     {** Resolves the cover image URL for an item, or '' when none exists. }
     function ResolveCoverUrl(const item: TCollectionItem): string; virtual; abstract;
 
-    {** Resolves a concrete download target for an item in the preferred format.
-      Returns false when the item has nothing downloadable in that format. }
-    function ResolveDownload(const item: TCollectionItem;
-      out target: TDownloadTarget): boolean; virtual; abstract;
+    {** Resolves every downloadable file for an item, and reports the item's
+      availability. An available item returns one or more targets (a Bandcamp
+      archive, or each of a DriveThruRPG product's files); a preorder or
+      unavailable item returns an empty array and the matching availability. }
+    function ResolveFiles(const item: TCollectionItem;
+      out availability: TAvailability): TDownloadTargetArray; virtual; abstract;
   end;
 
 {** Registers a backend class under its BackendName. Call once at unit

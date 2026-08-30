@@ -55,8 +55,8 @@ type
     procedure Authenticate; override;
     function ListCollection: TCollectionItemArray; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
-    function ResolveDownload(const item: TCollectionItem;
-      out target: TDownloadTarget): boolean; override;
+    function ResolveFiles(const item: TCollectionItem;
+      out availability: TAvailability): TDownloadTargetArray; override;
   end;
 
 implementation
@@ -519,22 +519,26 @@ begin
     ResolveCoverUrl := Format('https://f4.bcbits.com/img/a%s_10', [artId]);
 end;
 
-function TBandcampBackend.ResolveDownload(const item: TCollectionItem;
-  out target: TDownloadTarget): boolean;
+function TBandcampBackend.ResolveFiles(const item: TCollectionItem;
+  out availability: TAvailability): TDownloadTargetArray;
 var
+  target: TDownloadTarget;
   digital, downloads, formatEntry: TJSONObject;
   data: TJSONData;
   downloadUrl, statUrl, statBody, statJson, realUrl: string;
 begin
-  Result := false;
-  target := Default(TDownloadTarget);
-  target.itemId := item.id;
-  target.format := fCtx.audioFormat;
-  target.availability := avUnavailable;
+  { A Bandcamp item resolves to a single archive in the chosen audio format. }
+  Result := nil;
+  availability := avUnavailable;
 
   digital := GetDigitalItem(item);
   if digital = nil then
     exit;  { no digital item: vinyl-only, refunded, and so on }
+
+  target := Default(TDownloadTarget);
+  target.itemId := item.id;
+  target.format := fCtx.audioFormat;
+  target.name := fCtx.audioFormat;  { one file per item, keyed by its format }
 
   { package_release_date is the version signal: a re-upload changes it. It also
     dates the release, so a preorder carries a future one. }
@@ -553,7 +557,7 @@ begin
   downloads := digital.Get('downloads', TJSONObject(nil));
   if downloads = nil then begin
     { A digital item with no downloads is a purchase not yet released. }
-    target.availability := avPreorder;
+    availability := avPreorder;
     exit;
   end;
   formatEntry := downloads.Get(fCtx.audioFormat, TJSONObject(nil));
@@ -589,8 +593,9 @@ begin
         [e.Message]));
   end;
 
-  target.availability := avAvailable;
-  Result := true;
+  availability := avAvailable;
+  SetLength(Result, 1);
+  Result[0] := target;
 end;
 
 initialization

@@ -52,17 +52,21 @@ type
   {** Availability of an item's content at resolve time. }
   TAvailability = (avAvailable, avPreorder, avUnavailable);
 
+  {** One downloadable file of an item. An item may resolve to several (a
+    DriveThruRPG product has a PDF, a printer-friendly PDF, a zip, ...); a
+    Bandcamp item resolves to one archive. }
   TDownloadTarget = record
     itemId: string;
-    format: string;      { e.g. flac, mp3-320, pdf }
+    name: string;        { file identity within the item's version (the DB key) }
+    format: string;      { type: flac, mp3-320, pdf, zip }
     downloadUrl: string;
     suggestedName: string;
     artist: string;      { resolved from the item page, may be empty }
     title: string;
     versionKey: string;  { backend change signal, e.g. release date }
     releasedAt: string;  { when this version releases; future => preorder }
-    availability: TAvailability;
   end;
+  TDownloadTargetArray = array of TDownloadTarget;
 
 implementation
 
