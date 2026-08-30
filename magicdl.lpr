@@ -101,6 +101,7 @@ begin
   Writeln('  index                      Index a collection (no downloads)');
   Writeln('  sync                       Download new items');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
+  Writeln('  status                     Show a summary of the collection state');
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln;
@@ -554,6 +555,39 @@ begin
   end;
 end;
 
+procedure CmdStatus;
+var
+  index: TMagicIndex;
+  st: TIndexStats;
+  backend, scope: string;
+begin
+  backend := ArgValue('--backend', '');
+  if backend = '' then
+    scope := 'all backends'
+  else
+    scope := backend;
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  try
+    st := index.Stats(backend);
+    gLog.Info(Format('Collection status (%s):', [scope]));
+    gLog.Info(Format('  items:         %d', [st.items]));
+    gLog.Info(Format('    active:        %d', [st.active]));
+    gLog.Info(Format('    preorder:      %d', [st.preorder]));
+    gLog.Info(Format('    unavailable:   %d', [st.unavailable]));
+    gLog.Info(Format('    removed:       %d', [st.removed]));
+    gLog.Info(Format('  hidden:        %d', [st.hidden]));
+    gLog.Info(Format('  blacklisted:   %d', [st.blacklisted]));
+    gLog.Info(Format('  versions:      %d', [st.versions]));
+    gLog.Info(Format('  downloaded:    %d items (current version)',
+      [st.downloadedItems]));
+    gLog.Info(Format('  files:         %d present, %d missing',
+      [st.filesPresent, st.filesMissing]));
+  finally
+    index.Free;
+  end;
+end;
+
 procedure CmdBlacklist;
 begin
   SetBlacklistForIds(true, ArgValue('--reason', ''));
@@ -585,6 +619,7 @@ begin
         'index': CmdIndex;
         'sync': CmdSync;
         'verify': CmdVerify;
+        'status': CmdStatus;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
         '', '-h', '--help', 'help':

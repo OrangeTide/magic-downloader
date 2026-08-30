@@ -35,6 +35,16 @@ const
   ITEM_UNAVAILABLE = 'unavailable';
 
 type
+  {** Aggregate counts describing the collection state. }
+  TIndexStats = record
+    items: LongInt;
+    active, preorder, unavailable, removed: LongInt;
+    hidden, blacklisted: LongInt;
+    versions: LongInt;
+    downloadedItems: LongInt;   { items with a present file for the current version }
+    filesPresent, filesMissing: LongInt;
+  end;
+
   {** A file row joined with its owning version and item, for verification. }
   TIndexedFile = record
     id: Int64;
@@ -84,6 +94,9 @@ type
       path: string; size: Int64; const sha256, downloadedAt: string);
 
     function CountItems(const backend: string): LongInt;
+
+    {** Aggregate collection state, for the given backend or all when empty. }
+    function Stats(const backend: string): TIndexStats;
 
     {** All recorded files, for the given backend or every backend when empty. }
     function AllFiles(const backend: string): TIndexedFileArray;
@@ -451,6 +464,49 @@ begin
   finally
     q.Free;
   end;
+end;
+
+function TMagicIndex.Stats(const backend: string): TIndexStats;
+
+  function ScalarCount(const sql: string): LongInt;
+  var
+    q: TSQLQuery;
+  begin
+    q := NewQuery;
+    try
+      q.SQL.Text := sql;
+      q.ParamByName('backend').AsString := backend;
+      q.Open;
+      ScalarCount := q.Fields[0].AsInteger;
+      q.Close;
+    finally
+      q.Free;
+    end;
+  end;
+
+const
+  IB = ' WHERE (:backend='''' OR i.backend=:backend)';  { items i filter }
+  BB = ' WHERE (:backend='''' OR backend=:backend)';     { bare items filter }
+begin
+  Result.items       := ScalarCount('SELECT COUNT(*) FROM items' + BB);
+  Result.active      := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND status=''active''');
+  Result.preorder    := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND status=''preorder''');
+  Result.unavailable := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND status=''unavailable''');
+  Result.removed     := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND status=''removed''');
+  Result.hidden      := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND hidden=1');
+  Result.blacklisted := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND blacklisted=1');
+  Result.versions    := ScalarCount(
+    'SELECT COUNT(*) FROM versions v JOIN items i ON v.item_id=i.id' + IB);
+  Result.filesPresent := ScalarCount(
+    'SELECT COUNT(*) FROM files f JOIN versions v ON f.version_id=v.id ' +
+    'JOIN items i ON v.item_id=i.id' + IB + ' AND f.state=''present''');
+  Result.filesMissing := ScalarCount(
+    'SELECT COUNT(*) FROM files f JOIN versions v ON f.version_id=v.id ' +
+    'JOIN items i ON v.item_id=i.id' + IB + ' AND f.state=''missing''');
+  Result.downloadedItems := ScalarCount(
+    'SELECT COUNT(DISTINCT i.id) FROM items i ' +
+    'JOIN versions v ON v.item_id=i.id JOIN files f ON f.version_id=v.id' +
+    IB + ' AND v.is_current=1 AND f.state=''present''');
 end;
 
 function TMagicIndex.AllFiles(const backend: string): TIndexedFileArray;
