@@ -128,7 +128,7 @@ begin
   Writeln('  --downloaded               List filter: only downloaded items');
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
-  Writeln('  --json                     Machine-readable output (status/list/details)');
+  Writeln('  --json                     Machine-readable output (status/list/details/verify)');
   Writeln('  --interval-ms <n>          Base delay between requests (default 1000)');
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
@@ -464,20 +464,30 @@ var
   index: TMagicIndex;
   files, missingFiles: TIndexedFileArray;
   backend, scanDir, seen, found: string;
-  rehash, rescan: boolean;
+  rehash, rescan, jsonMode, didRescan: boolean;
   i, present, missing, repaired, mismatched: LongInt;
   map: TFPStringHashTable;
+  mismatches, stillMissing: TStringList;
+  relocFrom, relocTo: TStringList;
+  root, ro: TJSONObject;
+  arr: TJSONArray;
 begin
   backend := ArgValue('--backend', '');
   rehash := HasFlag('--rehash');
   rescan := HasFlag('--rescan');
+  jsonMode := HasFlag('--json');
   scanDir := ArgValue('--out', 'downloads');
 
+  mismatches := TStringList.Create;
+  stillMissing := TStringList.Create;
+  relocFrom := TStringList.Create;
+  relocTo := TStringList.Create;
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
     files := index.AllFiles(backend);
     present := 0; missing := 0; repaired := 0; mismatched := 0;
     missingFiles := nil;
+    didRescan := false;
     seen := NowIsoUtc;
 
     { Pass 1: presence, and optional integrity check of present files. }
@@ -486,7 +496,9 @@ begin
         if rehash and (files[i].sha256 <> '') then
           if Sha256File(files[i].path) <> files[i].sha256 then begin
             Inc(mismatched);
-            gLog.Warn(Format('hash mismatch: %s', [files[i].path]));
+            mismatches.Add(files[i].path);
+            if not jsonMode then
+              gLog.Warn(Format('hash mismatch: %s', [files[i].path]));
           end;
         index.SetFileState(files[i].id, 'present', seen);
         Inc(present);
@@ -502,23 +514,30 @@ begin
 
     { Pass 2: repair moved/renamed files by matching content hash. }
     if rescan and (missing > 0) and DirectoryExists(scanDir) then begin
-      gLog.Info(Format('Rescanning %s to relocate %d missing file(s)...',
-        [scanDir, missing]));
+      didRescan := true;
+      if not jsonMode then
+        gLog.Info(Format('Rescanning %s to relocate %d missing file(s)...',
+          [scanDir, missing]));
       map := TFPStringHashTable.Create;
       try
         ScanDirHashes(scanDir, map);
         seen := NowIsoUtc;
         for i := 0 to High(missingFiles) do begin
-          if missingFiles[i].sha256 = '' then
-            continue;
-          found := map[missingFiles[i].sha256];
+          found := '';
+          if missingFiles[i].sha256 <> '' then
+            found := map[missingFiles[i].sha256];
           if (found <> '') and FileExists(found) then begin
             index.UpdateFilePath(missingFiles[i].id, found, seen);
-            gLog.Info(Format('  relocated: %s -> %s',
-              [missingFiles[i].path, found]));
+            relocFrom.Add(missingFiles[i].path);
+            relocTo.Add(found);
+            if not jsonMode then
+              gLog.Info(Format('  relocated: %s -> %s',
+                [missingFiles[i].path, found]));
             Inc(repaired);
             Dec(missing);
-          end;
+          end
+          else
+            stillMissing.Add(missingFiles[i].path);
         end;
         index.Commit;
       finally
@@ -526,10 +545,48 @@ begin
       end;
     end;
 
-    gLog.Info(Format('Verify: %d present, %d missing, %d relocated, %d mismatched.',
-      [present, missing, repaired, mismatched]));
+    if not didRescan then
+      for i := 0 to High(missingFiles) do
+        stillMissing.Add(missingFiles[i].path);
+
+    if jsonMode then begin
+      root := TJSONObject.Create;
+      try
+        root.Add('present', present);
+        root.Add('missing', missing);
+        root.Add('relocated', repaired);
+        root.Add('mismatched', mismatched);
+        arr := TJSONArray.Create;
+        for i := 0 to relocFrom.Count - 1 do begin
+          ro := TJSONObject.Create;
+          ro.Add('from', relocFrom[i]);
+          ro.Add('to', relocTo[i]);
+          arr.Add(ro);
+        end;
+        root.Add('relocations', arr);
+        arr := TJSONArray.Create;
+        for i := 0 to mismatches.Count - 1 do
+          arr.Add(mismatches[i]);
+        root.Add('mismatches', arr);
+        arr := TJSONArray.Create;
+        for i := 0 to stillMissing.Count - 1 do
+          arr.Add(stillMissing[i]);
+        root.Add('missing_files', arr);
+        Writeln(root.FormatJSON);
+      finally
+        root.Free;
+      end;
+    end
+    else
+      gLog.Info(Format(
+        'Verify: %d present, %d missing, %d relocated, %d mismatched.',
+        [present, missing, repaired, mismatched]));
   finally
     index.Free;
+    mismatches.Free;
+    stillMissing.Free;
+    relocFrom.Free;
+    relocTo.Free;
   end;
 end;
 
