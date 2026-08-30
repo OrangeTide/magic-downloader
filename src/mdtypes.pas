@@ -49,6 +49,9 @@ type
   {** A concrete downloadable file resolved for a collection item and a chosen
     format. Backends fill downloadUrl once they have followed whatever indirection
     the store requires. }
+  {** Availability of an item's content at resolve time. }
+  TAvailability = (avAvailable, avPreorder, avUnavailable);
+
   TDownloadTarget = record
     itemId: string;
     format: string;      { e.g. flac, mp3-320, pdf }
@@ -56,6 +59,9 @@ type
     suggestedName: string;
     artist: string;      { resolved from the item page, may be empty }
     title: string;
+    versionKey: string;  { backend change signal, e.g. release date }
+    releasedAt: string;  { when this version releases; future => preorder }
+    availability: TAvailability;
   end;
 
 implementation

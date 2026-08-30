@@ -530,21 +530,35 @@ begin
   target := Default(TDownloadTarget);
   target.itemId := item.id;
   target.format := fCtx.audioFormat;
+  target.availability := avUnavailable;
 
   digital := GetDigitalItem(item);
   if digital = nil then
-    exit;  { vinyl-only or similar: nothing downloadable }
+    exit;  { no digital item: vinyl-only, refunded, and so on }
+
+  { package_release_date is the version signal: a re-upload changes it. It also
+    dates the release, so a preorder carries a future one. }
+  target.releasedAt := digital.Get('package_release_date', '');
+  if target.releasedAt <> '' then
+    target.versionKey := target.releasedAt
+  else
+    target.versionKey := 'default';
+
   { Name from the digital item, which carries the exact title and artist. Fall
     back to whatever the listing gave, then to the id, so a name is never blank. }
   target.artist := digital.Get('artist', item.artist);
   target.title := digital.Get('title', item.title);
   target.suggestedName := BuildItemName(target.artist, target.title, item.id);
+
   downloads := digital.Get('downloads', TJSONObject(nil));
-  if downloads = nil then
+  if downloads = nil then begin
+    { A digital item with no downloads is a purchase not yet released. }
+    target.availability := avPreorder;
     exit;
+  end;
   formatEntry := downloads.Get(fCtx.audioFormat, TJSONObject(nil));
   if formatEntry = nil then
-    exit;  { requested format not offered for this item }
+    exit;  { offered, but not in the requested format }
   downloadUrl := formatEntry.Get('url', '');
   if downloadUrl = '' then
     exit;
@@ -575,6 +589,7 @@ begin
         [e.Message]));
   end;
 
+  target.availability := avAvailable;
   Result := true;
 end;
 

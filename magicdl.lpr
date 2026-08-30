@@ -11,7 +11,7 @@ program magicdl;
 
 uses
   Classes, SysUtils,
-  mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdbackend, mdcookies,
+  mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdbackend_bandcamp;  { registers the bandcamp backend }
 
 const
@@ -207,6 +207,22 @@ begin
   end;
 end;
 
+{** Lists the collection and folds it into the index: upserts every item under a
+  single run timestamp, then sweeps anything not seen this run to removed. }
+procedure IndexCollection(backend: TMagicBackend; index: TMagicIndex;
+  const backendName: string; out items: TCollectionItemArray);
+var
+  seen: string;
+  i: LongInt;
+begin
+  seen := NowIsoUtc;
+  items := backend.ListCollection;
+  for i := 0 to High(items) do
+    index.UpsertItem(backendName, items[i], seen);
+  index.SweepRemoved(backendName, seen);
+  index.Commit;
+end;
+
 procedure CmdIndex;
 var
   backendClass: TMagicBackendClass;
@@ -214,7 +230,6 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
-  i: LongInt;
   backendName: string;
 begin
   backendClass := RequireBackend(backendName);
@@ -227,10 +242,7 @@ begin
         [backendName, ctx.user]));
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
-      items := backend.ListCollection;
-      for i := 0 to High(items) do
-        s.index.UpsertItem(backendName, items[i]);
-      s.index.Commit;
+      IndexCollection(backend, s.index, backendName, items);
       gLog.Info(Format('Indexed %d items (%d total in database).',
         [Length(items), s.index.CountItems(backendName)]));
     finally
@@ -241,35 +253,65 @@ begin
   end;
 end;
 
-{** Downloads one item: the archive, and its cover when --covers is set. Marks it
-  downloaded in the index. Honors --dry-run. Returns true when something was
-  fetched (or would have been, under dry-run). }
+{** Downloads one item: the archive, and its cover when --covers is set. Records
+  the version and file in the index. Honors --dry-run. Returns true when
+  something was fetched (or would have been, under dry-run). }
 function SyncItem(backend: TMagicBackend; const ctx: TMagicContext;
   const backendName: string; const item: TCollectionItem;
   withCovers: boolean): boolean;
 var
   target: TDownloadTarget;
-  named: TCollectionItem;
-  itemDir, baseName, coverUrl, savedPath: string;
+  available: boolean;
+  itemDir, baseName, coverUrl, savedPath, sha, seen: string;
+  fs: TFileStream;
+  fileSize: Int64;
 begin
   SyncItem := false;
-  if not backend.ResolveDownload(item, target) then begin
-    gLog.Info(Format('  skip "%s - %s": nothing downloadable in %s',
-      [item.artist, item.title, ctx.audioFormat]));
+  seen := NowIsoUtc;
+
+  if ctx.index.IsBlacklisted(backendName, item.id) then begin
+    gLog.Debug(Format('  skip blacklisted "%s"', [item.id]));
     exit;
   end;
 
-  { The resolved page carries the exact title and artist; fold them back into the
-    index so the record has a name even when the listing did not provide one. }
-  named := item;
-  if target.artist <> '' then named.artist := target.artist;
-  if target.title <> '' then named.title := target.title;
+  available := backend.ResolveDownload(item, target);
+
+  { Record the version whenever one was identified, even for a preorder, so the
+    index tracks it before it becomes downloadable. }
+  if target.versionKey <> '' then
+    ctx.index.UpsertVersion(backendName, item.id, target.versionKey,
+      target.releasedAt, seen);
+
+  if not available then begin
+    case target.availability of
+      avPreorder:
+        begin
+          ctx.index.SetItemStatus(backendName, item.id, ITEM_PREORDER);
+          gLog.Info(Format('  preorder "%s - %s": not released yet',
+            [target.artist, target.title]));
+        end;
+      else
+        begin
+          ctx.index.SetItemStatus(backendName, item.id, ITEM_UNAVAILABLE);
+          gLog.Info(Format('  skip "%s": nothing downloadable in %s',
+            [item.id, ctx.audioFormat]));
+        end;
+    end;
+    ctx.index.Commit;
+    exit;
+  end;
+
+  { Already have this exact version and format. }
+  if ctx.index.HasPresentFile(backendName, item.id, target.versionKey,
+    target.format) then
+    exit;
 
   baseName := SanitizeName(target.suggestedName);
   itemDir := IncludeTrailingPathDelimiter(ctx.outputDir) + baseName;
 
   if ctx.dryRun then begin
-    gLog.Info(Format('  would download "%s" -> %s', [target.suggestedName, itemDir]));
+    gLog.Info(Format('  would download "%s" -> %s',
+      [target.suggestedName, itemDir]));
     SyncItem := true;
     exit;
   end;
@@ -278,14 +320,24 @@ begin
   savedPath := ctx.http.Download(target.downloadUrl, itemDir, baseName + '.zip',
     pcNormal);
 
+  { Hash and size the file for move detection and integrity. }
+  sha := Sha256File(savedPath);
+  fs := TFileStream.Create(savedPath, fmOpenRead or fmShareDenyNone);
+  try
+    fileSize := fs.Size;
+  finally
+    fs.Free;
+  end;
+
   if withCovers then begin
     coverUrl := backend.ResolveCoverUrl(item);
     if coverUrl <> '' then
       ctx.http.Download(coverUrl, itemDir, 'cover.jpg', pcNormal);
   end;
 
-  ctx.index.UpsertItem(backendName, named);
-  ctx.index.MarkDownloaded(backendName, item.id, savedPath);
+  ctx.index.RecordFile(backendName, item.id, target.versionKey, target.format,
+    savedPath, fileSize, sha, seen);
+  ctx.index.SetItemStatus(backendName, item.id, ITEM_ACTIVE);
   ctx.index.Commit;
   SyncItem := true;
 end;
@@ -297,7 +349,7 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
-  i, fetched, skipped: LongInt;
+  i, fetched: LongInt;
   withCovers: boolean;
   backendName: string;
 begin
@@ -313,24 +365,14 @@ begin
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
 
-      items := backend.ListCollection;
-      for i := 0 to High(items) do
-        s.index.UpsertItem(backendName, items[i]);
-      s.index.Commit;
+      IndexCollection(backend, s.index, backendName, items);
       gLog.Info(Format('%d items in collection.', [Length(items)]));
 
       fetched := 0;
-      skipped := 0;
-      for i := 0 to High(items) do begin
-        if s.index.IsDownloaded(backendName, items[i].id) then begin
-          Inc(skipped);
-          continue;
-        end;
+      for i := 0 to High(items) do
         if SyncItem(backend, ctx, backendName, items[i], withCovers) then
           Inc(fetched);
-      end;
-      gLog.Info(Format('Sync done: %d fetched, %d already present.',
-        [fetched, skipped]));
+      gLog.Info(Format('Sync done: %d fetched.', [fetched]));
     finally
       backend.Free;
     end;
