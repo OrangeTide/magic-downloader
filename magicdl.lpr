@@ -730,6 +730,26 @@ begin
   end;
 end;
 
+{** Formats a byte count as a human-readable size (B, KiB, MiB, GiB, TiB). }
+function HumanSize(bytes: Int64): string;
+const
+  UNITS: array[0..4] of string = ('B', 'KiB', 'MiB', 'GiB', 'TiB');
+var
+  v: Double;
+  i: LongInt;
+begin
+  v := bytes;
+  i := 0;
+  while (v >= 1024) and (i < High(UNITS)) do begin
+    v := v / 1024;
+    Inc(i);
+  end;
+  if i = 0 then
+    HumanSize := Format('%d %s', [bytes, UNITS[0]])
+  else
+    HumanSize := Format('%.1f %s', [v, UNITS[i]]);
+end;
+
 procedure CmdStatus;
 var
   index: TMagicIndex;
@@ -761,6 +781,7 @@ begin
       [st.downloadedItems]));
     gLog.Info(Format('  files:         %d present, %d missing',
       [st.filesPresent, st.filesMissing]));
+    gLog.Info(Format('  size:          %s (present)', [HumanSize(st.bytesPresent)]));
 
     fmts := index.FormatCounts(backend);
     if Length(fmts) > 0 then begin
@@ -769,6 +790,7 @@ begin
         line := Format('%d present', [fmts[i].present]);
         if fmts[i].missing > 0 then
           line := line + Format(', %d missing', [fmts[i].missing]);
+        line := line + Format(', %s', [HumanSize(fmts[i].bytes)]);
         gLog.Info(Format('    %-10s %s', [fmts[i].format, line]));
       end;
     end;

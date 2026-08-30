@@ -43,6 +43,7 @@ type
     versions: LongInt;
     downloadedItems: LongInt;   { items with a present file for the current version }
     filesPresent, filesMissing: LongInt;
+    bytesPresent: Int64;        { total size of all present files }
   end;
 
   TDownloadedFilter = (dfAny, dfYes, dfNo);
@@ -70,6 +71,7 @@ type
   TFormatCount = record
     format: string;
     present, missing: LongInt;
+    bytes: Int64;          { total size of present files in this format }
   end;
   TFormatCountArray = array of TFormatCount;
 
@@ -589,6 +591,24 @@ function TMagicIndex.Stats(const backend: string): TIndexStats;
     end;
   end;
 
+  { A summed size can exceed 2^31, so it is read via CAST AS TEXT to avoid a
+    32-bit field truncation. }
+  function ScalarBytes(const sql: string): Int64;
+  var
+    q: TSQLQuery;
+  begin
+    q := NewQuery;
+    try
+      q.SQL.Text := sql;
+      q.ParamByName('backend').AsString := backend;
+      q.Open;
+      ScalarBytes := StrToInt64Def(q.Fields[0].AsString, 0);
+      q.Close;
+    finally
+      q.Free;
+    end;
+  end;
+
 const
   IB = ' WHERE (:backend='''' OR i.backend=:backend)';  { items i filter }
   BB = ' WHERE (:backend='''' OR backend=:backend)';     { bare items filter }
@@ -613,6 +633,10 @@ begin
     'SELECT COUNT(DISTINCT i.id) FROM items i ' +
     'JOIN versions v ON v.item_id=i.id JOIN files f ON f.version_id=v.id' +
     IB + ' AND v.is_current=1 AND f.state=''present''');
+  Result.bytesPresent := ScalarBytes(
+    'SELECT CAST(COALESCE(SUM(f.size),0) AS TEXT) FROM files f ' +
+    'JOIN versions v ON f.version_id=v.id JOIN items i ON v.item_id=i.id' +
+    IB + ' AND f.state=''present''');
 end;
 
 function TMagicIndex.FormatCounts(const backend: string): TFormatCountArray;
@@ -626,7 +650,9 @@ begin
     q.SQL.Text :=
       'SELECT f.format, ' +
       '  SUM(CASE WHEN f.state=''present'' THEN 1 ELSE 0 END) AS present, ' +
-      '  SUM(CASE WHEN f.state=''missing'' THEN 1 ELSE 0 END) AS missing ' +
+      '  SUM(CASE WHEN f.state=''missing'' THEN 1 ELSE 0 END) AS missing, ' +
+      '  CAST(COALESCE(SUM(CASE WHEN f.state=''present'' THEN f.size ELSE 0 END),0) ' +
+      '       AS TEXT) AS bytes ' +
       'FROM files f JOIN versions v ON f.version_id=v.id ' +
       'JOIN items i ON v.item_id=i.id ' +
       'WHERE (:backend='''' OR i.backend=:backend) ' +
@@ -639,6 +665,7 @@ begin
       Result[n].format := q.FieldByName('format').AsString;
       Result[n].present := q.FieldByName('present').AsInteger;
       Result[n].missing := q.FieldByName('missing').AsInteger;
+      Result[n].bytes := StrToInt64Def(q.FieldByName('bytes').AsString, 0);
       q.Next;
     end;
     q.Close;
