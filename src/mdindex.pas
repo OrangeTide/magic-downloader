@@ -62,7 +62,7 @@ type
 
   {** One item row with derived flags, for listing. }
   TIndexedItem = record
-    backendId, kind, title, creator, status: string;
+    backendId, kind, title, creator, pageUrl, status: string;
     hidden, blacklisted, superseded, downloaded: boolean;
   end;
   TIndexedItemArray = array of TIndexedItem;
@@ -725,8 +725,8 @@ begin
     fmtClause + '))';
 
   sql :=
-    'SELECT i.backend_id, i.kind, i.title, i.creator, i.status, i.hidden, ' +
-    '       i.blacklisted, (i.superseded_by IS NOT NULL) AS sup, ' +
+    'SELECT i.backend_id, i.kind, i.title, i.creator, i.page_url, i.status, ' +
+    '       i.hidden, i.blacklisted, (i.superseded_by IS NOT NULL) AS sup, ' +
     dlExpr + ' AS dl ' +
     'FROM items i WHERE (:backend='''' OR i.backend=:backend)';
   if f.status <> '' then
@@ -763,6 +763,7 @@ begin
       Result[n].kind := q.FieldByName('kind').AsString;
       Result[n].title := q.FieldByName('title').AsString;
       Result[n].creator := q.FieldByName('creator').AsString;
+      Result[n].pageUrl := q.FieldByName('page_url').AsString;
       Result[n].status := q.FieldByName('status').AsString;
       Result[n].hidden := q.FieldByName('hidden').AsInteger <> 0;
       Result[n].blacklisted := q.FieldByName('blacklisted').AsInteger <> 0;

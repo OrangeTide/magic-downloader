@@ -100,7 +100,8 @@ begin
   Writeln('Commands:');
   Writeln('  list-backends              List available backends');
   Writeln('  index                      Index a collection (no downloads)');
-  Writeln('  sync [<id>...]             Download new items (ids restrict to those)');
+  Writeln('  sync [<id>...]             Download items: full listing, given ids,');
+  Writeln('                             or --from-index to use the stored index');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
   Writeln('  status                     Show a summary of the collection state');
   Writeln('  list                       List items, with filters (see below)');
@@ -121,6 +122,7 @@ begin
   Writeln('  --out <dir>                Output directory (default ./downloads)');
   Writeln('  --format <fmt>             Preferred audio format (default flac)');
   Writeln('  --covers                   Also download cover images (sync)');
+  Writeln('  --from-index               Sync from the stored index, no API listing');
   Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
   Writeln('  --rescan                   Relocate moved files by content hash (verify)');
   Writeln('  --reason <text>            Note why an item is blacklisted');
@@ -329,6 +331,31 @@ begin
 end;
 
 {** A display name for an item's download folder. }
+{** Builds an item filter from the command-line options shared by list and
+  sync --from-index. }
+function ParseItemFilter: TItemFilter;
+begin
+  Result.backend := ArgValue('--backend', '');
+  Result.status := ArgValue('--status', '');
+  if (Result.status <> '') and (Result.status <> ITEM_ACTIVE)
+    and (Result.status <> ITEM_REMOVED) and (Result.status <> ITEM_PREORDER)
+    and (Result.status <> ITEM_UNAVAILABLE) then
+    raise EMagicError.CreateFmt(
+      'Unknown status "%s" (active|removed|preorder|unavailable).',
+      [Result.status]);
+  Result.onlyHidden := HasFlag('--hidden');
+  Result.onlyBlacklisted := HasFlag('--blacklisted');
+  Result.onlySuperseded := HasFlag('--superseded');
+  if HasFlag('--downloaded') then
+    Result.downloaded := dfYes
+  else if HasFlag('--not-downloaded') then
+    Result.downloaded := dfNo
+  else
+    Result.downloaded := dfAny;
+  Result.format := ArgValue('--format', '');
+  Result.limit := StrToIntDef(ArgValue('--limit', ''), 0);
+end;
+
 function ItemDisplayName(const item: TCollectionItem): string;
 begin
   if (item.artist <> '') and (item.title <> '') then
@@ -449,6 +476,8 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
+  filtered: TIndexedItemArray;
+  f: TItemFilter;
   only: TStringArray;
   detail: TItemDetail;
   item: TCollectionItem;
@@ -461,7 +490,7 @@ begin
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
-    '--timeout-ms']);
+    '--timeout-ms', '--status', '--limit']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http);
@@ -488,6 +517,25 @@ begin
           item.artist := detail.creator;
           item.itemType := detail.kind;
           item.pageUrl := detail.pageUrl;
+          if SyncItem(backend, ctx, backendName, item, withCovers) then
+            Inc(fetched);
+        end;
+      end
+      else if HasFlag('--from-index') then begin
+        { Download everything already indexed, without re-listing from the API.
+          Filters (--not-downloaded, --status, --limit, ...) narrow the set. }
+        f := ParseItemFilter;
+        f.backend := backendName;
+        filtered := s.index.ListItems(f);
+        gLog.Info(Format('Syncing %d indexed item(s) (no listing)...',
+          [Length(filtered)]));
+        for i := 0 to High(filtered) do begin
+          item := Default(TCollectionItem);
+          item.id := filtered[i].backendId;
+          item.title := filtered[i].title;
+          item.artist := filtered[i].creator;
+          item.itemType := filtered[i].kind;
+          item.pageUrl := filtered[i].pageUrl;
           if SyncItem(backend, ctx, backendName, item, withCovers) then
             Inc(fetched);
         end;
@@ -957,25 +1005,7 @@ var
   i: LongInt;
   flags, dl, name: string;
 begin
-  f.backend := ArgValue('--backend', '');
-  f.status := ArgValue('--status', '');
-  if (f.status <> '') and (f.status <> ITEM_ACTIVE)
-    and (f.status <> ITEM_REMOVED) and (f.status <> ITEM_PREORDER)
-    and (f.status <> ITEM_UNAVAILABLE) then
-    raise EMagicError.CreateFmt(
-      'Unknown status "%s" (active|removed|preorder|unavailable).', [f.status]);
-  f.onlyHidden := HasFlag('--hidden');
-  f.onlyBlacklisted := HasFlag('--blacklisted');
-  f.onlySuperseded := HasFlag('--superseded');
-  if HasFlag('--downloaded') then
-    f.downloaded := dfYes
-  else if HasFlag('--not-downloaded') then
-    f.downloaded := dfNo
-  else
-    f.downloaded := dfAny;
-  f.format := ArgValue('--format', '');
-  f.limit := StrToIntDef(ArgValue('--limit', ''), 0);
-
+  f := ParseItemFilter;
   index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
   try
     items := index.ListItems(f);
