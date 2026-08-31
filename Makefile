@@ -7,6 +7,13 @@ MAIN    := magicdl.lpr
 UNITDIR := src src/backends
 BUILD   := build
 
+# Install layout. DESTDIR supports staged installs for packaging.
+PREFIX  ?= /usr/local
+BINDIR  := $(PREFIX)/bin
+MANDIR  := $(PREFIX)/share/man/man1
+INSTALL ?= install
+MAN     := $(BUILD)/magicdl.1
+
 include version.mk
 
 # The tracked version is authoritative; git only refines it. A matching tag at
@@ -35,9 +42,19 @@ endif
 FPCFLAGS := $(addprefix -Fu,$(UNITDIR)) -Fi$(BUILD) -FE$(BUILD) -FU$(BUILD) \
     -O2 -Xs -veiwn
 
-.PHONY: all clean run release-check FORCE
+.PHONY: all man clean run release-check install uninstall FORCE
 
 all: $(BUILD)/$(TARGET)
+
+man: $(MAN)
+
+# The man page, with the version and date substituted in. FORCE so the version
+# tracks git state; the cmp guard avoids rewriting when nothing changed.
+$(MAN): man/magicdl.1.in version.mk FORCE | $(BUILD)
+	@sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@DATE@/$(shell date +%Y-%m-%d)/g' \
+	    $< > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
 
 $(BUILD)/$(TARGET): $(MAIN) $(wildcard src/*.pas) $(wildcard src/backends/*.pas) \
     $(BUILD)/version.inc | $(BUILD)
@@ -58,6 +75,14 @@ $(BUILD):
 
 run: all
 	$(BUILD)/$(TARGET) $(ARGS)
+
+install: all $(MAN)
+	$(INSTALL) -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
+	$(INSTALL) -m 0755 $(BUILD)/$(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
+	$(INSTALL) -m 0644 $(MAN) $(DESTDIR)$(MANDIR)/magicdl.1
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(TARGET) $(DESTDIR)$(MANDIR)/magicdl.1
 
 # Verify version.mk and the git tag agree before cutting a release.
 release-check:

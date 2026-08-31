@@ -1,0 +1,249 @@
+.\" Man page for magicdl. PUBLIC DOMAIN (CC0-1.0)
+.TH MAGICDL 1 "@DATE@" "magicdl @VERSION@" "User Commands"
+.SH NAME
+magicdl \- index, download, and organize purchased digital collections
+.SH SYNOPSIS
+.B magicdl
+.I command
+.RI [ options ]
+.RI [ arguments ]
+.SH DESCRIPTION
+.B magicdl
+keeps a local index of the content you own on supported stores, downloads what
+is new, and verifies what is already on disk. It tracks multiple versions of an
+item, records removed, hidden, and pre-ordered content, and stores a SHA\-256
+per downloaded file so moved files can be relocated and integrity checked.
+.PP
+A run selects a backend with
+.B \-\-backend
+and supplies that backend's credentials. The state lives in a SQLite index
+named by
+.BR \-\-db .
+.SH COMMANDS
+.TP
+.B list\-backends
+List the available backends.
+.TP
+.B index
+Fetch the list of owned content and store it, without downloading files.
+.TP
+.BI "sync " "[id...]"
+Download content. With no arguments it lists the whole collection from the
+store and downloads what is new. With item ids it resolves only those from the
+index. With
+.B \-\-from\-index
+it downloads what is already indexed without contacting the store's listing,
+narrowed by the list filters (for example
+.BR \-\-not\-downloaded ).
+.TP
+.B verify
+Check downloaded files. Mark each present or missing;
+.B \-\-rehash
+re\-hashes present files to detect changed content;
+.B \-\-rescan
+hashes the output tree and relocates files that were moved, matched by hash.
+.TP
+.B status
+Show a summary of the collection: item and version counts, per\-format and
+per\-backend breakdowns, and total size.
+.TP
+.B list
+List items, one per line, with filters such as
+.BR \-\-status ", " \-\-not\-downloaded ", and " \-\-limit .
+.TP
+.BI "details " id
+Show one item's versions and the files under each.
+.TP
+.BI "blacklist " "id..."
+Mark items so
+.B sync
+skips them. Add
+.B \-\-reason
+to note why.
+.TP
+.BI "allow " "id..."
+Remove items from the blacklist.
+.TP
+.BI "relocate " "old new"
+Record that an item moved from one id to another. The old item is skipped by
+.BR sync .
+.TP
+.BI "import " dir
+Mark indexed items that already exist under an
+.IR Artist / "YYYY \- Album"
+music library so
+.B sync
+skips them. Matching is by name. Use
+.B \-\-dry\-run
+to review matches before marking.
+.SH OPTIONS
+.SS Selection and credentials
+.TP
+.BI "\-\-backend " name
+Backend to use (see
+.BR BACKENDS ).
+.TP
+.BI "\-\-user " name
+Store account or fan\-page handle (Bandcamp).
+.TP
+.BI "\-\-app\-key " key
+Application or API key (DriveThruRPG, itch.io). Exposes the key in the process
+list; prefer the file form.
+.TP
+.BI "\-\-app\-key\-file " path
+Read the application or API key from a file, so it never appears on the command
+line.
+.TP
+.BI "\-\-cookies " path
+Cookies file (Bandcamp): a Firefox cookies.sqlite, a Cookie Quick Manager JSON
+export, or a Netscape cookies.txt.
+.TP
+.B \-\-firefox
+Load Bandcamp cookies from the Firefox profiles on this machine.
+.SS Storage and content
+.TP
+.BI "\-\-db " path
+Index database. Default
+.BR magicdl.sqlite .
+.TP
+.BI "\-\-out " dir
+Output directory. Default
+.BR ./downloads .
+.TP
+.BI "\-\-format " list
+Content formats, comma\-separated. For a single\-file backend (Bandcamp) the
+first entry is the audio format to request
+.RB ( flac ", " vorbis " for ogg, " mp3\-320 ", ...)."
+For multi\-file backends the list keeps only those file types (for example
+.BR pdf ", " pdf,epub ).
+Unset means
+.B flac
+for Bandcamp and every file elsewhere.
+.TP
+.B \-\-covers
+Also download cover images (Bandcamp).
+.TP
+.B \-\-from\-index
+For
+.BR sync :
+download from the stored index without listing from the store.
+.TP
+.B \-\-skip\-hidden
+Skip hidden collection items when indexing.
+.SS verify
+.TP
+.B \-\-rehash
+Re\-hash present files to check integrity.
+.TP
+.B \-\-rescan
+Relocate moved files by content hash, scanning
+.BR \-\-out .
+.SS list filters
+.TP
+.BI "\-\-status " s
+Only items with this status
+.RB ( active ", " removed ", " preorder ", " unavailable ).
+.TP
+.B \-\-hidden ", " \-\-blacklisted ", " \-\-superseded
+Only items with the named flag.
+.TP
+.B \-\-downloaded ", " \-\-not\-downloaded
+Only items that are, or are not, downloaded.
+.TP
+.BI "\-\-limit " n
+Cap the number of items.
+.SS Output and pacing
+.TP
+.B \-\-json
+Machine\-readable output for
+.BR status ", " list ", " details ", " verify ", " blacklist ", " allow ", and " relocate .
+.TP
+.BI "\-\-interval\-ms " n
+Base delay between requests. Default 3000.
+.TP
+.BI "\-\-retries " n
+Retries per request. Default 5.
+.TP
+.BI "\-\-timeout\-ms " n
+Per\-request timeout. Default 30000.
+.TP
+.BI "\-\-reason " text
+Note why an item is blacklisted.
+.TP
+.B \-\-dry\-run
+Resolve and report without writing files.
+.TP
+.B \-\-verbose
+Debug logging.
+.SH BACKENDS
+.TP
+.B bandcamp
+Audio. Authenticates with browser cookies
+.RB ( \-\-firefox " or " \-\-cookies )
+and needs
+.BR \-\-user .
+.TP
+.B drivethrurpg
+RPG PDFs and files. Authenticates with an application key from the account's
+"Library App Keys" page.
+.TP
+.B itchio
+Games, tools, and assets. Authenticates with an API key from
+itch.io/user/settings/api\-keys.
+.SH AUTHENTICATION
+Bandcamp uses your logged\-in browser session cookies. DriveThruRPG and itch.io
+use an application or API key; store it in a file and pass
+.B \-\-app\-key\-file
+so the secret does not appear in the process list.
+.SH FILES
+.TP
+.B magicdl.sqlite
+Default index database (override with
+.BR \-\-db ).
+.TP
+.B ./downloads
+Default output directory (override with
+.BR \-\-out ).
+.SH EXAMPLES
+.PP
+Index a DriveThruRPG library:
+.PP
+.RS
+.EX
+magicdl index \-\-backend drivethrurpg \-\-app\-key\-file .appkey
+.EE
+.RE
+.PP
+Download everything not yet fetched, from the index, without re\-listing:
+.PP
+.RS
+.EX
+magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-from\-index \-\-not\-downloaded
+.EE
+.RE
+.PP
+Fetch only the PDFs of an item:
+.PP
+.RS
+.EX
+magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-format pdf 12345
+.EE
+.RE
+.PP
+Sync a Bandcamp collection as ogg:
+.PP
+.RS
+.EX
+magicdl sync \-\-backend bandcamp \-\-user yourhandle \-\-firefox \-\-format vorbis
+.EE
+.RE
+.SH RATE LIMITING
+Some stores are quick to rate limit and slow to forgive. Requests are spaced out
+and backed off after an HTTP 429. The defaults are conservative;
+.B \-\-interval\-ms
+sets a faster base pace when an account tolerates it.
+.SH EXIT STATUS
+.B magicdl
+exits 0 on success, 1 on an error, and 2 on an unknown command.
+.SH COPYRIGHT
+PUBLIC DOMAIN (CC0\-1.0).

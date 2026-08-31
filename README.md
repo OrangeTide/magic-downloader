@@ -59,6 +59,16 @@ make
 
 This produces `build/magicdl`. `make clean` removes the build directory.
 
+To install the binary and man page (default prefix `/usr/local`):
+
+```
+sudo make install
+```
+
+`PREFIX` and `DESTDIR` are honored, so `make install PREFIX=/usr DESTDIR=pkg`
+stages a packaged install. `make uninstall` removes both files. After a system
+install, `man magicdl` shows the manual.
+
 ## Authentication
 
 Each backend needs its own credentials.
