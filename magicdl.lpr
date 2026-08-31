@@ -125,7 +125,10 @@ begin
   Writeln('  --firefox                  Load cookies from Firefox profiles');
   Writeln('  --db <path>                Index database (default magicdl.sqlite)');
   Writeln('  --out <dir>                Output directory (default ./downloads)');
-  Writeln('  --format <fmt>             Preferred audio format (default flac)');
+  Writeln('  --format <list>            Content formats, comma-separated. Bandcamp');
+  Writeln('                             requests the first (flac, vorbis=ogg, mp3-320,');
+  Writeln('                             ...); multi-file backends keep only these');
+  Writeln('                             types (e.g. pdf,epub). Unset: flac / all');
   Writeln('  --covers                   Also download cover images (sync)');
   Writeln('  --from-index               Sync from the stored index, no API listing');
   Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
@@ -188,7 +191,18 @@ begin
   if (Result.apiKey = '') and (ArgValue('--app-key-file', '') <> '') then
     Result.apiKey := ReadKeyFile(ArgValue('--app-key-file', ''));
   Result.outputDir := ArgValue('--out', 'downloads');
-  Result.audioFormat := ArgValue('--format', 'flac');
+  { --format is a comma list. For a single-file backend (Bandcamp) the first
+    token is the audio format to request; for multi-file backends the whole set
+    filters which files to download. Unset means flac for Bandcamp and all files
+    elsewhere. }
+  if ArgValue('--format', '') <> '' then begin
+    Result.formats := ArgValue('--format', '').Split([',']);
+    Result.audioFormat := Trim(Result.formats[0]);
+  end
+  else begin
+    Result.formats := nil;
+    Result.audioFormat := 'flac';
+  end;
   Result.skipHidden := HasFlag('--skip-hidden');
   Result.dryRun := HasFlag('--dry-run');
 end;
@@ -361,6 +375,36 @@ begin
   Result.limit := StrToIntDef(ArgValue('--limit', ''), 0);
 end;
 
+{** True when fmt is in the desired set, or the set is empty (no filter). }
+function FormatWanted(const fmt: string; const formats: TStringArray): boolean;
+var
+  i: LongInt;
+begin
+  if Length(formats) = 0 then
+    exit(true);
+  for i := 0 to High(formats) do
+    if SameText(Trim(formats[i]), fmt) then
+      exit(true);
+  FormatWanted := false;
+end;
+
+{** Keeps only the targets whose format is wanted. }
+function FilterTargets(const targets: TDownloadTargetArray;
+  const formats: TStringArray): TDownloadTargetArray;
+var
+  i, n: LongInt;
+begin
+  if Length(formats) = 0 then
+    exit(targets);
+  Result := nil;
+  for i := 0 to High(targets) do
+    if FormatWanted(targets[i].format, formats) then begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n] := targets[i];
+    end;
+end;
+
 function ItemDisplayName(const item: TCollectionItem): string;
 begin
   if (item.artist <> '') and (item.title <> '') then
@@ -421,6 +465,14 @@ begin
       gLog.Info(Format('  skip "%s": nothing downloadable', [item.id]));
     end;
     ctx.index.Commit;
+    exit;
+  end;
+
+  { Keep only the wanted formats. An item that has files but none in the chosen
+    format is left alone (it is available, just not in that format). }
+  targets := FilterTargets(targets, ctx.formats);
+  if Length(targets) = 0 then begin
+    gLog.Info(Format('  skip "%s": no files in the selected format', [item.id]));
     exit;
   end;
 

@@ -24,7 +24,8 @@ type
     user: string;          { store account/user name, backend interpreted }
     apiKey: string;        { API/application key, for token-auth backends }
     outputDir: string;
-    audioFormat: string;   { preferred audio format, e.g. flac }
+    audioFormat: string;   { the audio format a single-file backend requests }
+    formats: TStringArray; { desired formats; empty means all (multi-file filter) }
     skipHidden: boolean;
     dryRun: boolean;
   end;
