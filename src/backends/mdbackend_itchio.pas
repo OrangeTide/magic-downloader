@@ -104,11 +104,14 @@ begin
       [page]), pcLight);
     data := GetJSON(respText);
     try
-      if not (data is TJSONObject)
-        or not (TJSONObject(data).Find('owned_keys') is TJSONArray) then
+      if not (data is TJSONObject) then
         raise EMagicError.Create(
-          'itch.io owned-keys response was not in the expected form.');
+          'itch.io owned-keys response was not a JSON object.');
       root := TJSONObject(data);
+      { A page past the last returns owned_keys as an empty object {}, not an
+        empty array, so anything that is not a non-empty array ends the loop. }
+      if not (root.Find('owned_keys') is TJSONArray) then
+        break;
       keysArr := TJSONArray(root.Find('owned_keys'));
       if keysArr.Count = 0 then
         break;
