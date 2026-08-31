@@ -130,8 +130,15 @@ magicdl sync --backend drivethrurpg --app-key-file .appkey-dtrpg --from-index --
 
 Files land under `--out <dir>` (default `./downloads`) in a
 `Creator - Title` folder per item. Add `--covers` to also fetch cover images
-(Bandcamp). For Bandcamp, `--format <fmt>` chooses the audio format (default
-`flac`).
+(Bandcamp).
+
+`--format` selects the content type, as a comma-separated list. For Bandcamp,
+which serves one archive, the first entry is the audio format to request (`flac`,
+`vorbis` for ogg, `mp3-320`, and so on; the default is `flac`). For the
+multi-file backends (DriveThruRPG, itch.io), the list filters which files to
+download by type, so `--format pdf` fetches only PDFs and `--format pdf,epub`
+fetches both while skipping the rest. Without `--format`, Bandcamp uses `flac`
+and the multi-file backends download every file.
 
 ### Inspect the collection
 
