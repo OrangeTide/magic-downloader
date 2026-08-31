@@ -1,0 +1,52 @@
+; Example magicdl configuration.
+;
+; Copy this to ~/.config/magicdl/config.ini and edit it. Set
+; $XDG_CONFIG_HOME to use a different config directory.
+;
+; A value is looked up in the backend's own section first,
+; [backend.<name>], then in [general]. So a backend section overrides the
+; shared default. A command-line option always overrides the config.
+;
+; Paths may use ~ for your home directory and environment variables as
+; $VAR or ${VAR}.
+;
+; PUBLIC DOMAIN (CC0-1.0)
+
+[general]
+; Index database. Omit to use the standard data location,
+; ~/.local/share/magicdl/magicdl.sqlite.
+db = ~/.local/share/magicdl/magicdl.sqlite
+
+; Output directory for downloads. There is no built-in default: set it here
+; or pass --out. sync and verify need it.
+out = ~/media/collections
+
+; Content formats, comma-separated. For single-file backends (Bandcamp) the
+; first entry is the audio format to request; for multi-file backends the
+; list filters which file types to keep. A backend section can override this.
+;format = flac
+
+; Request pacing, matching the --interval-ms, --retries, --timeout-ms flags.
+;interval-ms = 1000
+;retries = 5
+;timeout-ms = 30000
+
+[backend.drivethrurpg]
+; File holding the DriveThruRPG application key, so it stays off the command
+; line. Create the key on the "Library App Keys" page of your account.
+app-key-file = ~/.config/magicdl/keys/dtrpg
+
+[backend.itchio]
+; File holding the itch.io API key, from
+; https://itch.io/user/settings/api-keys.
+app-key-file = ~/.config/magicdl/keys/itch
+
+[backend.bandcamp]
+; Your Bandcamp fan page handle (bandcamp.com/<user>).
+user = your-fan-handle
+; Cookies for the logged-in session: a Firefox cookies.sqlite, a Cookie Quick
+; Manager JSON export, or a Netscape cookies.txt. Omit and pass --firefox to
+; read them from your Firefox profiles instead.
+cookies = ~/.config/bandcamp/cookies.txt
+; Bandcamp keeps its own audio format here, overriding [general] format.
+format = flac

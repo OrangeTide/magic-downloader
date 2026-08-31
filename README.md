@@ -138,6 +138,9 @@ Recognised keys: `db`, `out`, `format`, `interval-ms`, `retries`, `timeout-ms`
 (per backend). There is no built-in output directory. Set `out` in the config,
 or pass `--out <dir>`, before syncing or verifying.
 
+See [`config.ini.example`](config.ini.example) for a documented starting point;
+copy it to `~/.config/magicdl/config.ini` and edit.
+
 ## Usage
 
 The general form is:
