@@ -442,19 +442,6 @@ begin
   SyncItem := fetchedAny;
 end;
 
-{** True when only is empty (no restriction) or id is listed in it. }
-function IdAllowed(const id: string; const only: TStringArray): boolean;
-var
-  i: LongInt;
-begin
-  if Length(only) = 0 then
-    exit(true);
-  for i := 0 to High(only) do
-    if only[i] = id then
-      exit(true);
-  IdAllowed := false;
-end;
-
 procedure CmdSync;
 var
   backendClass: TMagicBackendClass;
@@ -463,6 +450,8 @@ var
   ctx: TMagicContext;
   items: TCollectionItemArray;
   only: TStringArray;
+  detail: TItemDetail;
+  item: TCollectionItem;
   i, fetched: LongInt;
   withCovers: boolean;
   backendName: string;
@@ -471,7 +460,8 @@ begin
   withCovers := HasFlag('--covers');
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
-    '--app-key', '--interval-ms', '--retries', '--timeout-ms']);
+    '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
+    '--timeout-ms']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http);
@@ -482,14 +472,34 @@ begin
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
 
-      IndexCollection(backend, s.index, backendName, items);
-      gLog.Info(Format('%d items in collection.', [Length(items)]));
-
       fetched := 0;
-      for i := 0 to High(items) do
-        if IdAllowed(items[i].id, only) then
+      if Length(only) > 0 then begin
+        { Targeted sync: resolve the named items from the index, no full listing. }
+        gLog.Info(Format('Syncing %d item(s) from the index...', [Length(only)]));
+        for i := 0 to High(only) do begin
+          if not s.index.GetItem(backendName, only[i], detail) then begin
+            gLog.Warn(Format('item "%s" is not indexed; run index first',
+              [only[i]]));
+            continue;
+          end;
+          item := Default(TCollectionItem);
+          item.id := detail.backendId;
+          item.title := detail.title;
+          item.artist := detail.creator;
+          item.itemType := detail.kind;
+          item.pageUrl := detail.pageUrl;
+          if SyncItem(backend, ctx, backendName, item, withCovers) then
+            Inc(fetched);
+        end;
+      end
+      else begin
+        { Full sync: list the whole collection to catch new and changed items. }
+        IndexCollection(backend, s.index, backendName, items);
+        gLog.Info(Format('%d items in collection.', [Length(items)]));
+        for i := 0 to High(items) do
           if SyncItem(backend, ctx, backendName, items[i], withCovers) then
             Inc(fetched);
+      end;
       gLog.Info(Format('Sync done: %d fetched.', [fetched]));
     finally
       backend.Free;

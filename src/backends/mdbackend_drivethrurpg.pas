@@ -41,8 +41,12 @@ type
 
   TDriveThruRpgBackend = class(TMagicBackend)
   private
-    {** orderProductId -> TDtProduct, populated by ListCollection. }
+    {** orderProductId -> TDtProduct, populated by ListCollection or a lazy
+      single-product fetch. }
     fProducts: TStringList;
+    {** Fetches one product by id and caches its file list, so a restricted sync
+      can resolve without listing the whole library. }
+    procedure FetchProduct(const orderProductId: string);
     {** Runs prepare then polls check until the file is ready; returns its
       download URL, or '' when it never became ready. }
     function PrepareFileUrl(const orderProductId: string; index: LongInt): string;
@@ -66,21 +70,61 @@ const
   DEFAULT_SITE = 10;
   MAX_PREPARE_POLLS = 30;
 
-{** Extracts the url and status fields from a prepare/check JSON response. }
+{** Returns obj.data.attributes, or nil. The API wraps resources JSON:API style. }
+function DataAttributes(root: TJSONData): TJSONObject;
+var
+  dataObj: TJSONData;
+begin
+  DataAttributes := nil;
+  if not (root is TJSONObject) then
+    exit;
+  dataObj := TJSONObject(root).Find('data');
+  if (dataObj is TJSONObject)
+    and (TJSONObject(dataObj).Find('attributes') is TJSONObject) then
+    DataAttributes := TJSONObject(TJSONObject(dataObj).Objects['attributes']);
+end;
+
+{** Extracts the url and status from a prepare/check response. The fields live in
+  data.attributes (JSON:API), not at the top level. }
 procedure ParsePrepareResponse(const respText: string; out url, status: string);
 var
   data: TJSONData;
+  attrs: TJSONObject;
 begin
   url := '';
   status := '';
   data := GetJSON(respText);
   try
-    if data is TJSONObject then begin
-      url := TJSONObject(data).Get('url', '');
-      status := TJSONObject(data).Get('status', '');
+    attrs := DataAttributes(data);
+    if attrs <> nil then begin
+      url := attrs.Get('url', '');
+      status := attrs.Get('status', '');
     end;
   finally
     data.Free;
+  end;
+end;
+
+{** Builds a cache entry (version key + file list) from a product's attributes. }
+function BuildProductCache(attrs: TJSONObject): TDtProduct;
+var
+  filesArr: TJSONArray;
+  fileObj: TJSONObject;
+  j: LongInt;
+begin
+  Result := TDtProduct.Create;
+  Result.versionKey := attrs.Get('fileLastModified', '');
+  if Result.versionKey = '' then
+    Result.versionKey := 'default';
+  if attrs.Find('files') is TJSONArray then begin
+    filesArr := attrs.Arrays['files'];
+    for j := 0 to filesArr.Count - 1 do
+      if filesArr.Items[j] is TJSONObject then begin
+        fileObj := TJSONObject(filesArr.Items[j]);
+        SetLength(Result.files, Length(Result.files) + 1);
+        Result.files[High(Result.files)].index := fileObj.Get('index', 0);
+        Result.files[High(Result.files)].filename := fileObj.Get('filename', '');
+      end;
   end;
 end;
 
@@ -156,14 +200,13 @@ end;
 
 function TDriveThruRpgBackend.ListCollection: TCollectionItemArray;
 var
-  page, i, j, n: LongInt;
+  page, i, n: LongInt;
   respText, orderId, pubId: string;
   data: TJSONData;
-  root, el, attrs, rel, fileObj: TJSONObject;
-  dataArr, filesArr: TJSONArray;
+  root, el, attrs, rel: TJSONObject;
+  dataArr: TJSONArray;
   pubs: TStringList;
   it: TCollectionItem;
-  cached: TDtProduct;
 begin
   Result := nil;
   pubs := TStringList.Create;
@@ -218,22 +261,7 @@ begin
           Result[n] := it;
 
           { Cache the file list so ResolveFiles can build download targets. }
-          cached := TDtProduct.Create;
-          cached.versionKey := attrs.Get('fileLastModified', '');
-          if cached.versionKey = '' then
-            cached.versionKey := 'default';
-          if attrs.Find('files') is TJSONArray then begin
-            filesArr := attrs.Arrays['files'];
-            for j := 0 to filesArr.Count - 1 do
-              if filesArr.Items[j] is TJSONObject then begin
-                fileObj := TJSONObject(filesArr.Items[j]);
-                SetLength(cached.files, Length(cached.files) + 1);
-                cached.files[High(cached.files)].index := fileObj.Get('index', 0);
-                cached.files[High(cached.files)].filename :=
-                  fileObj.Get('filename', '');
-              end;
-          end;
-          fProducts.AddObject(orderId, cached);
+          fProducts.AddObject(orderId, BuildProductCache(attrs));
         end;
       finally
         data.Free;
@@ -242,6 +270,25 @@ begin
     end;
   finally
     pubs.Free;
+  end;
+end;
+
+procedure TDriveThruRpgBackend.FetchProduct(const orderProductId: string);
+var
+  respText: string;
+  data: TJSONData;
+  attrs: TJSONObject;
+begin
+  respText := fCtx.http.Get(BASE_URL + 'order_products/' + orderProductId +
+    '?getChecksum=1', pcNormal);
+  data := GetJSON(respText);
+  try
+    attrs := DataAttributes(data);
+    if attrs = nil then
+      exit;
+    fProducts.AddObject(orderProductId, BuildProductCache(attrs));
+  finally
+    data.Free;
   end;
 end;
 
@@ -289,8 +336,13 @@ begin
   availability := avUnavailable;
 
   idx := fProducts.IndexOf(item.id);
+  if idx < 0 then begin
+    { Not cached from a listing (a restricted sync): fetch just this product. }
+    FetchProduct(item.id);
+    idx := fProducts.IndexOf(item.id);
+  end;
   if idx < 0 then
-    exit;  { not listed this run; nothing to resolve }
+    exit;  { could not resolve the product }
   prod := TDtProduct(fProducts.Objects[idx]);
   if Length(prod.files) = 0 then
     exit;

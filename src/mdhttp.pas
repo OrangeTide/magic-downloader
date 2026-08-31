@@ -29,11 +29,12 @@ type
       Content-Disposition) in contentDisposition. Raises only for transport
       failures (no HTTP answer). }
     function DoOnceToStream(const method, url, requestBody: string;
-      respStream: TStream; out contentDisposition: string): LongInt;
+      respStream: TStream; sendAuth: boolean; out contentDisposition: string): LongInt;
     {** The shared pacing and retry loop. Writes the successful response body to
       respStream, which is reset before each attempt. }
     procedure RunWithRetry(const method, url, requestBody: string;
-      respStream: TStream; pacing: TPacing; out contentDisposition: string);
+      respStream: TStream; pacing: TPacing; sendAuth: boolean;
+      out contentDisposition: string);
     function Request(const method, url, requestBody: string;
       pacing: TPacing): string;
   public
@@ -165,7 +166,7 @@ begin
 end;
 
 function TMagicHttp.DoOnceToStream(const method, url, requestBody: string;
-  respStream: TStream; out contentDisposition: string): LongInt;
+  respStream: TStream; sendAuth: boolean; out contentDisposition: string): LongInt;
 var
   client: TFPHTTPClient;
   reqStream: TStringStream;
@@ -179,7 +180,7 @@ begin
     client.IOTimeout := fTimeoutMs;
     if (fCookies <> nil) and (fCookies.Count > 0) then
       client.AddHeader('Cookie', fCookies.HeaderValue);
-    if fAuthHeader <> '' then
+    if sendAuth and (fAuthHeader <> '') then
       client.AddHeader('Authorization', fAuthHeader);
     if requestBody <> '' then begin
       client.AddHeader('Content-Type', 'application/json');
@@ -198,7 +199,8 @@ begin
 end;
 
 procedure TMagicHttp.RunWithRetry(const method, url, requestBody: string;
-  respStream: TStream; pacing: TPacing; out contentDisposition: string);
+  respStream: TStream; pacing: TPacing; sendAuth: boolean;
+  out contentDisposition: string);
 var
   attempt, attempts, statusCode: LongInt;
   delay: Int64;
@@ -213,7 +215,7 @@ begin
     respStream.Position := 0;
     try
       statusCode := DoOnceToStream(method, url, requestBody, respStream,
-        contentDisposition);
+        sendAuth, contentDisposition);
       if statusCode >= 400 then
         raise EMagicHttpError.Create(
           Format('HTTP %d for %s', [statusCode, url]), statusCode);
@@ -261,7 +263,7 @@ var
 begin
   buf := TStringStream.Create('');
   try
-    RunWithRetry(method, url, requestBody, buf, pacing, disposition);
+    RunWithRetry(method, url, requestBody, buf, pacing, true, disposition);
     Request := buf.DataString;
   finally
     buf.Free;
@@ -293,7 +295,9 @@ begin
   partPath := IncludeTrailingPathDelimiter(destDir) + fallbackName + '.part';
   fs := TFileStream.Create(partPath, fmCreate);
   try
-    RunWithRetry('GET', url, '', fs, pacing, disposition);
+    { No auth header on downloads: file URLs go to CDN/watermark hosts that
+      reject the API token (DriveThruRPG returns a 302 that then 400s). }
+    RunWithRetry('GET', url, '', fs, pacing, false, disposition);
   finally
     fs.Free;
   end;
