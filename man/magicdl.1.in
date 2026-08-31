@@ -103,12 +103,15 @@ Load Bandcamp cookies from the Firefox profiles on this machine.
 .SS Storage and content
 .TP
 .BI "\-\-db " path
-Index database. Default
-.BR magicdl.sqlite .
+Index database. Defaults to the config
+.B db
+key, or
+.BR ~/.local/share/magicdl/magicdl.sqlite .
 .TP
 .BI "\-\-out " dir
-Output directory. Default
-.BR ./downloads .
+Output directory. Required; taken from the config
+.B out
+key when not given. There is no built\-in default.
 .TP
 .BI "\-\-format " list
 Content formats, comma\-separated. For a single\-file backend (Bandcamp) the
@@ -197,13 +200,29 @@ use an application or API key; store it in a file and pass
 so the secret does not appear in the process list.
 .SH FILES
 .TP
-.B magicdl.sqlite
-Default index database (override with
-.BR \-\-db ).
+.B ~/.config/magicdl/config.ini
+Optional config file
+.RB ( $XDG_CONFIG_HOME/magicdl/config.ini
+when that variable is set). A
+.B [general]
+section and a
+.BI [backend. name ]
+section per backend set defaults for
+.BR db ", " out ", " user ", " app\-key\-file ", " cookies ", and " format .
+A backend section overrides
+.BR [general] ,
+and a command\-line option overrides both. Paths may use
+.B ~
+and environment variables.
 .TP
-.B ./downloads
-Default output directory (override with
-.BR \-\-out ).
+.B ~/.local/share/magicdl/magicdl.sqlite
+Default index database
+.RB ( $XDG_DATA_HOME/magicdl/
+when set; override with
+.B \-\-db
+or the config
+.B db
+key).
 .SH EXAMPLES
 .PP
 Index a DriveThruRPG library:
@@ -218,7 +237,7 @@ Download everything not yet fetched, from the index, without re\-listing:
 .PP
 .RS
 .EX
-magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-from\-index \-\-not\-downloaded
+magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-out ~/rpg \-\-from\-index \-\-not\-downloaded
 .EE
 .RE
 .PP
@@ -226,7 +245,7 @@ Fetch only the PDFs of an item:
 .PP
 .RS
 .EX
-magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-format pdf 12345
+magicdl sync \-\-backend drivethrurpg \-\-app\-key\-file .appkey \-\-out ~/rpg \-\-format pdf 12345
 .EE
 .RE
 .PP
@@ -234,7 +253,7 @@ Sync a Bandcamp collection as ogg:
 .PP
 .RS
 .EX
-magicdl sync \-\-backend bandcamp \-\-user yourhandle \-\-firefox \-\-format vorbis
+magicdl sync \-\-backend bandcamp \-\-user yourhandle \-\-firefox \-\-out ~/music \-\-format vorbis
 .EE
 .RE
 .SH RATE LIMITING

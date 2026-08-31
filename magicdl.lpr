@@ -14,6 +14,7 @@ uses
     Unicode paths are stored and read unchanged (no single-byte transcode) }
   Classes, SysUtils, contnrs, fpjson,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
+  mdconfig,
   mdbackend_bandcamp,      { registers the bandcamp backend }
   mdbackend_drivethrurpg,  { registers the drivethrurpg backend }
   mdbackend_itchio;        { registers the itchio backend }
@@ -33,6 +34,7 @@ type
 
 var
   gLog: TMagicLogger;
+  gConfig: TMagicConfig;
 
 { ---- Argument handling ---- }
 
@@ -123,8 +125,9 @@ begin
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
   Writeln('                             Manager JSON, or Netscape cookies.txt)');
   Writeln('  --firefox                  Load cookies from Firefox profiles');
-  Writeln('  --db <path>                Index database (default magicdl.sqlite)');
-  Writeln('  --out <dir>                Output directory (default ./downloads)');
+  Writeln('  --db <path>                Index database (default: standard data');
+  Writeln('                             dir, or config [general] db)');
+  Writeln('  --out <dir>                Output directory (required; or config out)');
   Writeln('  --format <list>            Content formats, comma-separated. Bandcamp');
   Writeln('                             requests the first (flac, vorbis=ogg, mp3-320,');
   Writeln('                             ...); multi-file backends keep only these');
@@ -150,6 +153,11 @@ begin
   Writeln('  --skip-hidden              Skip hidden collection items');
   Writeln('  --dry-run                  Do not write files');
   Writeln('  --verbose                  Debug logging');
+  Writeln;
+  Writeln('Config file (optional): ',
+    IncludeTrailingPathDelimiter(gConfig.ConfigDir), 'config.ini');
+  Writeln('  [general] and [backend.<name>] sections set db, out, user,');
+  Writeln('  app-key-file, cookies, format. Command-line options win.');
   Writeln;
   names := RegisteredBackendNames;
   Write('Registered backends:');
@@ -177,8 +185,47 @@ begin
   end;
 end;
 
+{** The index database path. Precedence: --db, then the config [general] db,
+  then the standard data location. The parent directory is created if needed so
+  a fresh install can open a new database. }
+function ResolveDbPath: string;
+begin
+  Result := ArgValue('--db', '');
+  if Result = '' then
+    Result := gConfig.Get('', 'db', '');
+  if Result = '' then
+    Result := IncludeTrailingPathDelimiter(gConfig.DataDir) + 'magicdl.sqlite';
+  Result := ExpandPathVars(Result);
+  ForceDirectories(ExtractFilePath(Result));
+end;
+
+{** The output directory, or '' when none is configured. Precedence: --out,
+  then config out (backend section, then general). There is no built-in
+  default. }
+function OutDirOrEmpty(const backend: string): string;
+begin
+  Result := ArgValue('--out', '');
+  if Result = '' then
+    Result := gConfig.Get(backend, 'out', '');
+  if Result <> '' then
+    Result := ExpandPathVars(Result);
+end;
+
+{** The output directory, raising when none is set. Used by commands that must
+  write or read files. }
+function RequireOutDir(const backend: string): string;
+begin
+  Result := OutDirOrEmpty(backend);
+  if Result = '' then
+    raise EMagicError.Create('No output directory. Pass --out <dir>, or set ' +
+      'out= in ' + IncludeTrailingPathDelimiter(gConfig.ConfigDir) +
+      'config.ini.');
+end;
+
 function BuildContext(index: TMagicIndex; cookies: TCookieJar;
-  http: TMagicHttp): TMagicContext;
+  http: TMagicHttp; const backendName: string): TMagicContext;
+var
+  keyFile: string;
 begin
   Result := Default(TMagicContext);
   Result.log := gLog;
@@ -186,23 +233,37 @@ begin
   Result.cookies := cookies;
   Result.index := index;
   Result.user := ArgValue('--user', '');
+  if Result.user = '' then
+    Result.user := gConfig.Get(backendName, 'user', '');
   Result.apiKey := ArgValue('--app-key', '');
-  { Prefer a key file so the secret is not exposed in the process command line. }
-  if (Result.apiKey = '') and (ArgValue('--app-key-file', '') <> '') then
-    Result.apiKey := ReadKeyFile(ArgValue('--app-key-file', ''));
-  Result.outputDir := ArgValue('--out', 'downloads');
+  { Prefer a key file so the secret is not exposed in the process command line.
+    A bare app-key in the config file is also fine: the file is not readable by
+    other processes the way a command line is. }
+  if Result.apiKey = '' then begin
+    keyFile := ArgValue('--app-key-file', '');
+    if keyFile = '' then
+      keyFile := gConfig.Get(backendName, 'app-key-file', '');
+    if keyFile <> '' then
+      Result.apiKey := ReadKeyFile(ExpandPathVars(keyFile))
+    else
+      Result.apiKey := gConfig.Get(backendName, 'app-key', '');
+  end;
+  { The output directory may be unset here; commands that download check it. }
+  Result.outputDir := OutDirOrEmpty(backendName);
   { --format is a comma list. For a single-file backend (Bandcamp) the first
     token is the audio format to request; for multi-file backends the whole set
     filters which files to download. Unset means flac for Bandcamp and all files
     elsewhere. }
-  if ArgValue('--format', '') <> '' then begin
-    Result.formats := ArgValue('--format', '').Split([',']);
-    Result.audioFormat := Trim(Result.formats[0]);
-  end
-  else begin
+  if ArgValue('--format', '') <> '' then
+    Result.formats := ArgValue('--format', '').Split([','])
+  else if gConfig.Get(backendName, 'format', '') <> '' then
+    Result.formats := gConfig.Get(backendName, 'format', '').Split([','])
+  else
     Result.formats := nil;
+  if Result.formats <> nil then
+    Result.audioFormat := Trim(Result.formats[0])
+  else
     Result.audioFormat := 'flac';
-  end;
   Result.skipHidden := HasFlag('--skip-hidden');
   Result.dryRun := HasFlag('--dry-run');
 end;
@@ -217,6 +278,9 @@ var
   profiles: LongInt;
 begin
   cookiesPath := ArgValue('--cookies', '');
+  if cookiesPath = '' then
+    cookiesPath := ExpandPathVars(
+      gConfig.Get(ArgValue('--backend', ''), 'cookies', ''));
   if cookiesPath <> '' then begin
     LoadCookiesFromFile(cookiesPath, cookies, backendClass.CookieHost, gLog);
     gLog.Info(Format('Loaded %d cookies from %s.', [cookies.Count, cookiesPath]));
@@ -256,12 +320,17 @@ end;
 function OpenSession: TSession;
 begin
   Result.cookies := TCookieJar.Create;
+  { CLI wins, then the config [general] section, then the built-in default. }
   Result.pacer := TPacer.Create(gLog,
-    StrToInt64Def(ArgValue('--interval-ms', ''), DEFAULT_REQUEST_INTERVAL_MS));
+    StrToInt64Def(ArgValue('--interval-ms', ''),
+      StrToInt64Def(gConfig.Get('', 'interval-ms', ''),
+        DEFAULT_REQUEST_INTERVAL_MS)));
   Result.http := TMagicHttp.Create(gLog, Result.pacer, Result.cookies,
-    StrToIntDef(ArgValue('--retries', ''), 5),
-    StrToIntDef(ArgValue('--timeout-ms', ''), 30000));
-  Result.index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+    StrToIntDef(ArgValue('--retries', ''),
+      StrToIntDef(gConfig.Get('', 'retries', ''), 5)),
+    StrToIntDef(ArgValue('--timeout-ms', ''),
+      StrToIntDef(gConfig.Get('', 'timeout-ms', ''), 30000)));
+  Result.index := TMagicIndex.Create(ResolveDbPath);
 end;
 
 procedure CloseSession(var s: TSession);
@@ -331,7 +400,7 @@ begin
   backendClass := RequireBackend(backendName);
   s := OpenSession;
   try
-    ctx := BuildContext(s.index, s.cookies, s.http);
+    ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     backend := backendClass.Create(ctx);
     try
       gLog.Info(Format('Indexing %s collection for "%s"...',
@@ -555,7 +624,10 @@ begin
     '--timeout-ms', '--status', '--limit']);
   s := OpenSession;
   try
-    ctx := BuildContext(s.index, s.cookies, s.http);
+    ctx := BuildContext(s.index, s.cookies, s.http, backendName);
+    { sync writes files, so an output directory is required. }
+    if ctx.outputDir = '' then
+      RequireOutDir(backendName);
     backend := backendClass.Create(ctx);
     try
       gLog.Info(Format('Syncing %s collection for "%s"...',
@@ -660,13 +732,13 @@ begin
   rehash := HasFlag('--rehash');
   rescan := HasFlag('--rescan');
   jsonMode := HasFlag('--json');
-  scanDir := ArgValue('--out', 'downloads');
+  scanDir := RequireOutDir(backend);
 
   mismatches := TStringList.Create;
   stillMissing := TStringList.Create;
   relocFrom := TStringList.Create;
   relocTo := TStringList.Create;
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     files := index.AllFiles(backend);
     present := 0; missing := 0; repaired := 0; mismatched := 0;
@@ -800,7 +872,7 @@ begin
 
   changedIds := TStringList.Create;
   notIndexed := TStringList.Create;
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     changed := 0;
     for i := 0 to High(ids) do begin
@@ -864,7 +936,7 @@ begin
   oldId := ids[0];
   newId := ids[1];
 
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     if not index.ItemExists(backendName, oldId) then
       raise EMagicError.CreateFmt('Old item "%s" is not indexed.', [oldId]);
@@ -971,7 +1043,7 @@ begin
     raise EMagicError.Create('Usage: details --backend X <item-id>');
   id := ids[0];
 
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     if not index.GetItem(backend, id, item) then
       raise EMagicError.CreateFmt('Item "%s" is not indexed.', [id]);
@@ -1068,7 +1140,7 @@ var
   flags, dl, name: string;
 begin
   f := ParseItemFilter;
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     items := index.ListItems(f);
 
@@ -1245,7 +1317,7 @@ var
   i: LongInt;
 begin
   backend := ArgValue('--backend', '');
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   try
     if HasFlag('--json') then begin
       StatusJson(index, backend);
@@ -1323,7 +1395,7 @@ begin
     raise EMagicError.CreateFmt('Directory "%s" not found.', [dir]);
   dryRun := HasFlag('--dry-run');
 
-  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  index := TMagicIndex.Create(ResolveDbPath);
   keys := TStringList.Create;
   try
     { Index items keyed by sanitized "creator/title". }
@@ -1408,6 +1480,7 @@ begin
     gLog := TMagicLogger.Create(llDebug)
   else
     gLog := TMagicLogger.Create(llInfo);
+  gConfig := TMagicConfig.Create;
   try
     command := '';
     if ParamCount >= 1 then
@@ -1445,6 +1518,7 @@ begin
       end;
     end;
   finally
+    gConfig.Free;
     gLog.Free;
   end;
 end.

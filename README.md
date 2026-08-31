@@ -101,6 +101,43 @@ magicdl index --backend itchio --app-key-file .appkey-itch
 `--app-key <key>` also works but exposes the key to other local processes
 through the process list, so the file form is preferred.
 
+## Configuration
+
+By default the index lives in the standard data location and settings can come
+from a config file, so you do not have to repeat options on every run.
+
+ * **Data**: the index database defaults to `~/.local/share/magicdl/magicdl.sqlite`
+   (`$XDG_DATA_HOME/magicdl/` when that variable is set). The directory is
+   created on first use.
+ * **Config**: an optional `~/.config/magicdl/config.ini`
+   (`$XDG_CONFIG_HOME/magicdl/config.ini` when set).
+
+The config file has a `[general]` section for shared settings and a
+`[backend.<name>]` section per backend. A backend section overrides `[general]`.
+A command-line option always overrides the config. Paths may use `~` and
+environment variables (`$VAR` or `${VAR}`).
+
+```ini
+[general]
+db  = ~/.local/share/magicdl/magicdl.sqlite
+out = ~/media/collections
+
+[backend.drivethrurpg]
+app-key-file = ~/.config/magicdl/keys/dtrpg
+
+[backend.itchio]
+app-key-file = ~/.config/magicdl/keys/itch
+
+[backend.bandcamp]
+user    = your-fan-handle
+cookies = ~/.config/bandcamp/cookies.txt
+```
+
+Recognised keys: `db`, `out`, `format`, `interval-ms`, `retries`, `timeout-ms`
+(general), and `user`, `app-key-file`, `app-key`, `cookies`, `out`, `format`
+(per backend). There is no built-in output directory. Set `out` in the config,
+or pass `--out <dir>`, before syncing or verifying.
+
 ## Usage
 
 The general form is:
@@ -122,7 +159,8 @@ magicdl index --backend bandcamp --user yourhandle --firefox
 
 ### Sync
 
-`sync` has three modes:
+`sync` has three modes (each needs an output directory, from `--out` or the
+config `out` key):
 
 ```
 magicdl sync --backend bandcamp --user yourhandle --firefox        # full: list, then download new
@@ -138,9 +176,10 @@ magicdl sync --backend drivethrurpg --app-key-file .appkey-dtrpg --from-index --
    list filters such as `--not-downloaded` to fetch only what you are missing.
    This is the fast path for a large library you have already indexed.
 
-Files land under `--out <dir>` (default `./downloads`) in a
-`Creator - Title` folder per item. Add `--covers` to also fetch cover images
-(Bandcamp).
+Files land under the output directory in a `Creator - Title` folder per item.
+Set it with `--out <dir>` or the config `out` key; there is no default, so a
+sync or verify without one is an error. Add `--covers` to also fetch cover
+images (Bandcamp).
 
 `--format` selects the content type, as a comma-separated list. For Bandcamp,
 which serves one archive, the first entry is the audio format to request (`flac`,
@@ -164,7 +203,7 @@ Add `--json` to `status`, `list`, or `details` for machine-readable output.
 
 ```
 magicdl verify --rehash                 # confirm files are present and unchanged
-magicdl verify --rescan --out downloads # relocate files you moved, matched by hash
+magicdl verify --rescan --out <dir>     # relocate files you moved, matched by hash
 magicdl blacklist <id> --reason "dup"   # sync will skip these items
 magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
@@ -172,8 +211,8 @@ magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
 
 ## How it stores things
 
-The index is a SQLite database (`--db`, default `magicdl.sqlite`) with three
-levels:
+The index is a SQLite database (`--db`, or the config `db` key; default
+`~/.local/share/magicdl/magicdl.sqlite`) with three levels:
 
  * **items**: one row per purchase, kept forever. Carries status (active,
    removed, preorder, unavailable), hidden and blacklist flags, and presence
