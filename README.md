@@ -176,7 +176,10 @@ deliberately conservative. `--interval-ms <n>` sets the base delay between
 requests if an account tolerates a faster pace. A large library still takes a
 while to list, since listing is paginated.
 
-## Status
+## Version
 
-Early and under active development. The version string reports
-`v0.0.1-skeleton`.
+The version is set in `version.mk` (`PROJ_VERSION`) and refined by git at build
+time: a matching `v<version>` tag at HEAD gives a clean version, commits past it
+add the count and short commit id, and a dirty tree is marked. `magicdl --help`
+reports the version. To cut a release, bump `version.mk`, commit, tag the commit
+`v<version>`, and run `make release-check`.
