@@ -26,10 +26,10 @@ Working:
 
  * **bandcamp** (audio; authenticates with browser cookies)
  * **drivethrurpg** (RPG PDFs and files; authenticates with an application key)
+ * **itchio** (games, tools, and assets; authenticates with an API key)
 
 Planned:
 
- * itch.io
  * gumroad
  * Amazon Music Library
 
@@ -75,15 +75,17 @@ ways:
 You also pass `--user <name>`, your Bandcamp fan page handle
 (`bandcamp.com/<name>`).
 
-### DriveThruRPG
+### DriveThruRPG and itch.io
 
-DriveThruRPG uses an application key. Create one on the "Library App Keys" page
-of your account. Store it in a file and pass the file, so the key does not appear
-on the command line:
+Both use an application key. Create a DriveThruRPG key on the "Library App Keys"
+page of your account, or an itch.io key at
+`https://itch.io/user/settings/api-keys`. Store it in a file and pass the file,
+so the key does not appear on the command line:
 
 ```
 echo 'YOUR_KEY_HERE' > .appkey-dtrpg
 magicdl index --backend drivethrurpg --app-key-file .appkey-dtrpg
+magicdl index --backend itchio --app-key-file .appkey-itch
 ```
 
 `--app-key <key>` also works but exposes the key to other local processes
