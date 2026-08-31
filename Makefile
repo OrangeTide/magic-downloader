@@ -28,12 +28,12 @@ UNITDIR += $(OPENSSL_SRC)
 endif
 
 # -Fu adds unit search paths, -Fi the include path (for version.inc), -FE sets
-# the output (exe) dir, -FU the unit dir. -FcUTF8 marks the source as UTF-8 so
-# string literals carry the UTF-8 code page and sqldb stores them unchanged
-# (otherwise the sanitizer's Unicode replacements are mangled on the way into
-# SQLite and paths no longer match disk).
+# the output (exe) dir, -FU the unit dir. The program uses the cwstring unit so
+# the runtime default code page is the locale's UTF-8, which makes the source
+# byte literals (the sanitizer's Unicode replacements) and paths pass through
+# the filesystem and SQLite unchanged.
 FPCFLAGS := $(addprefix -Fu,$(UNITDIR)) -Fi$(BUILD) -FE$(BUILD) -FU$(BUILD) \
-    -FcUTF8 -O2 -Xs -veiwn
+    -O2 -Xs -veiwn
 
 .PHONY: all clean run release-check FORCE
 

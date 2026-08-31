@@ -108,7 +108,7 @@ begin
         raise EMagicError.Create(
           'itch.io owned-keys response was not a JSON object.');
       root := TJSONObject(data);
-      { A page past the last returns owned_keys as an empty object {}, not an
+      { A page past the last returns owned_keys as an empty object, not an
         empty array, so anything that is not a non-empty array ends the loop. }
       if not (root.Find('owned_keys') is TJSONArray) then
         break;

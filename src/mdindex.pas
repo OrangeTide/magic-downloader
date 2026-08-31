@@ -26,7 +26,7 @@ uses
   Classes, SysUtils, DateUtils, sqldb, sqlite3conn, db, mdtypes;
 
 const
-  SCHEMA_VERSION = 3;
+  SCHEMA_VERSION = 4;
 
   { Item lifecycle status values. }
   ITEM_ACTIVE      = 'active';
@@ -39,7 +39,7 @@ type
   TIndexStats = record
     items: LongInt;
     active, preorder, unavailable, removed: LongInt;
-    hidden, blacklisted, superseded: LongInt;
+    hidden, blacklisted, superseded, imported: LongInt;
     versions: LongInt;
     downloadedItems: LongInt;   { items with a present file for the current version }
     filesPresent, filesMissing: LongInt;
@@ -129,6 +129,11 @@ type
 
     function ItemExists(const backend, backendId: string): boolean;
     function IsBlacklisted(const backend, backendId: string): boolean;
+
+    {** Marks an item as already owned locally at path (or clears it when path is
+      empty). Such items are skipped by sync. }
+    procedure SetImported(const backend, backendId, path: string);
+    function IsImported(const backend, backendId: string): boolean;
 
     {** Records that oldId's entitlement now lives under newId. Both must already
       exist. The old item keeps its history and files but is skipped by sync. }
@@ -241,13 +246,26 @@ begin
 end;
 
 procedure TMagicIndex.EnsureSchema;
+var
+  uv: LongInt;
 begin
-  if SchemaVersion >= SCHEMA_VERSION then
+  uv := SchemaVersion;
+  if uv >= SCHEMA_VERSION then
     exit;
 
-  { The index holds only a rebuildable cache, so an out-of-date schema is dropped
-    and recreated rather than migrated. Re-running index or sync repopulates it.
-    Children are dropped before parents for the foreign keys. }
+  { v3 -> v4 only adds items.imported_path, so migrate in place to keep the
+    indexed data rather than dropping it. }
+  if uv = 3 then begin
+    fConn.ExecuteDirect('ALTER TABLE items ADD COLUMN imported_path TEXT');
+    fConn.ExecuteDirect('PRAGMA user_version = ' + IntToStr(SCHEMA_VERSION));
+    fTrans.Commit;
+    exit;
+  end;
+
+  { Older or fresh: the index holds only a rebuildable cache, so an out-of-date
+    schema is dropped and recreated rather than migrated. Re-running index or
+    sync repopulates it. Children are dropped before parents for the foreign
+    keys. }
   fConn.ExecuteDirect('DROP TABLE IF EXISTS files');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS versions');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS items');
@@ -269,6 +287,7 @@ begin
     '  first_seen    TEXT NOT NULL,' +
     '  last_seen     TEXT NOT NULL,' +
     '  superseded_by INTEGER REFERENCES items(id),' +
+    '  imported_path TEXT,' +
     '  UNIQUE (backend, backend_id))');
 
   fConn.ExecuteDirect(
@@ -448,6 +467,46 @@ begin
     q.ParamByName('backend_id').AsString := backendId;
     q.Open;
     IsSuperseded := (not q.EOF) and (not q.Fields[0].IsNull);
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+procedure TMagicIndex.SetImported(const backend, backendId, path: string);
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'UPDATE items SET imported_path=:path ' +
+      'WHERE backend=:backend AND backend_id=:backend_id';
+    if path = '' then
+      q.ParamByName('path').Clear   { NULL clears the imported mark }
+    else
+      q.ParamByName('path').AsString := path;
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.ExecSQL;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.IsImported(const backend, backendId: string): boolean;
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT imported_path FROM items ' +
+      'WHERE backend=:backend AND backend_id=:backend_id';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    IsImported := (not q.EOF) and (not q.Fields[0].IsNull);
     q.Close;
   finally
     q.Free;
@@ -653,6 +712,7 @@ begin
   Result.hidden      := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND hidden=1');
   Result.blacklisted := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND blacklisted=1');
   Result.superseded  := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND superseded_by IS NOT NULL');
+  Result.imported    := ScalarCount('SELECT COUNT(*) FROM items' + BB + ' AND imported_path IS NOT NULL');
   Result.versions    := ScalarCount(
     'SELECT COUNT(*) FROM versions v JOIN items i ON v.item_id=i.id' + IB);
   Result.filesPresent := ScalarCount(

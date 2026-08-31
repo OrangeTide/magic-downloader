@@ -113,6 +113,7 @@ begin
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
+  Writeln('  import <dir>               Mark items already in an Artist/Album library');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
@@ -399,6 +400,11 @@ begin
 
   if ctx.index.IsSuperseded(backendName, item.id) then begin
     gLog.Debug(Format('  skip superseded "%s"', [item.id]));
+    exit;
+  end;
+
+  if ctx.index.IsImported(backendName, item.id) then begin
+    gLog.Debug(Format('  skip imported "%s" (already owned locally)', [item.id]));
     exit;
   end;
 
@@ -1085,6 +1091,7 @@ begin
   gLog.Info(Format('  hidden:        %d', [st.hidden]));
   gLog.Info(Format('  blacklisted:   %d', [st.blacklisted]));
   gLog.Info(Format('  superseded:    %d', [st.superseded]));
+  gLog.Info(Format('  imported:      %d', [st.imported]));
   gLog.Info(Format('  versions:      %d', [st.versions]));
   gLog.Info(Format('  downloaded:    %d items (current version)',
     [st.downloadedItems]));
@@ -1130,6 +1137,7 @@ begin
   Result.Add('hidden', st.hidden);
   Result.Add('blacklisted', st.blacklisted);
   Result.Add('superseded', st.superseded);
+  Result.Add('imported', st.imported);
   Result.Add('versions', st.versions);
   Result.Add('downloaded_items', st.downloadedItems);
 
@@ -1223,6 +1231,121 @@ begin
   SetBlacklistForIds(false, '');
 end;
 
+{** Strips a leading "YYYY - " (year and separator) from an album folder name,
+  matching how the reference tool prefixes album folders. }
+function StripYearPrefix(const s: string): string;
+begin
+  StripYearPrefix := s;
+  if (Length(s) >= 7) and (s[1] in ['0'..'9']) and (s[2] in ['0'..'9'])
+    and (s[3] in ['0'..'9']) and (s[4] in ['0'..'9'])
+    and (Copy(s, 5, 3) = ' - ') then
+    StripYearPrefix := Copy(s, 8, Length(s));
+end;
+
+{** Marks indexed items that already exist under an external directory (an
+  Artist/Album music library) so sync skips them. Matching is by identity: the
+  artist folder equals SanitizeName(creator) and the album folder, minus its
+  "YYYY - " prefix, equals SanitizeName(title). --dry-run reports without
+  marking. }
+procedure CmdImport;
+var
+  backendName, dir, artistPath, albumTitle, key: string;
+  args: TStringArray;
+  index: TMagicIndex;
+  items: TIndexedItemArray;
+  keys: TStringList;
+  f: TItemFilter;
+  artistRec, albumRec: TSearchRec;
+  i, idx, matched, unmatched: LongInt;
+  dryRun: boolean;
+begin
+  backendName := ArgValue('--backend', '');
+  if FindBackend(backendName) = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backendName]);
+  args := Positionals(['--backend', '--db']);
+  if Length(args) <> 1 then
+    raise EMagicError.Create('Usage: import --backend X <library-dir>');
+  dir := args[0];
+  if not DirectoryExists(dir) then
+    raise EMagicError.CreateFmt('Directory "%s" not found.', [dir]);
+  dryRun := HasFlag('--dry-run');
+
+  index := TMagicIndex.Create(ArgValue('--db', 'magicdl.sqlite'));
+  keys := TStringList.Create;
+  try
+    { Index items keyed by sanitized "creator/title". }
+    FillChar(f, SizeOf(f), 0);
+    f.backend := backendName;
+    items := index.ListItems(f);
+    keys.Sorted := true;
+    keys.Duplicates := dupIgnore;
+    for i := 0 to High(items) do
+      keys.AddObject(
+        SanitizeName(items[i].creator) + '/' + SanitizeName(items[i].title),
+        TObject(PtrInt(i)));
+
+    matched := 0;
+    unmatched := 0;
+    { Walk artist folders, then album folders. }
+    if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faDirectory,
+      artistRec) = 0 then
+    try
+      repeat
+        if (artistRec.Name = '.') or (artistRec.Name = '..')
+          or ((artistRec.Attr and faDirectory) = 0) then
+          continue;
+        artistPath := IncludeTrailingPathDelimiter(dir) + artistRec.Name;
+        if FindFirst(IncludeTrailingPathDelimiter(artistPath) + '*',
+          faDirectory, albumRec) = 0 then
+        try
+          repeat
+            if (albumRec.Name = '.') or (albumRec.Name = '..')
+              or ((albumRec.Attr and faDirectory) = 0) then
+              continue;
+            albumTitle := StripYearPrefix(albumRec.Name);
+            key := artistRec.Name + '/' + albumTitle;
+            idx := keys.IndexOf(key);
+            if idx < 0 then  { try the folder name unstripped }
+              idx := keys.IndexOf(artistRec.Name + '/' + albumRec.Name);
+            if idx >= 0 then begin
+              i := PtrInt(keys.Objects[idx]);
+              Inc(matched);
+              if dryRun then
+                gLog.Info(Format('  match: %s - %s  [%s]',
+                  [items[i].creator, items[i].title, items[i].backendId]))
+              else
+                index.SetImported(backendName, items[i].backendId,
+                  IncludeTrailingPathDelimiter(artistPath) + albumRec.Name);
+            end
+            else begin
+              Inc(unmatched);
+              gLog.Debug(Format('  no match: %s/%s',
+                [artistRec.Name, albumRec.Name]));
+            end;
+          until FindNext(albumRec) <> 0;
+        finally
+          FindClose(albumRec);
+        end;
+      until FindNext(artistRec) <> 0;
+    finally
+      FindClose(artistRec);
+    end;
+
+    if not dryRun then
+      index.Commit;
+    if dryRun then
+      gLog.Info(Format('Would import %d item(s); %d folder(s) had no match.',
+        [matched, unmatched]))
+    else
+      gLog.Info(Format('Imported %d item(s); %d folder(s) had no match.',
+        [matched, unmatched]));
+  finally
+    keys.Free;
+    index.Free;
+  end;
+end;
+
 { ---- Main ---- }
 
 var
@@ -1248,6 +1371,7 @@ begin
         'list': CmdList;
         'details': CmdDetails;
         'relocate': CmdRelocate;
+        'import': CmdImport;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
         '', '-h', '--help', 'help':
