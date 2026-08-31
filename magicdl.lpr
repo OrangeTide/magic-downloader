@@ -10,6 +10,8 @@ program magicdl;
 {$mode objfpc}{$H+}
 
 uses
+  {$IFDEF UNIX}cwstring,{$ENDIF}  { UTF-8 default codepage from the locale, so
+    Unicode paths are stored and read unchanged (no single-byte transcode) }
   Classes, SysUtils, contnrs, fpjson,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdbackend_bandcamp,      { registers the bandcamp backend }
