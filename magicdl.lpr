@@ -117,6 +117,8 @@ begin
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
   Writeln('  import <dir>               Mark items already in an Artist/Album library');
+  Writeln('  manifest                   Write a library manifest (Markdown or --html)');
+  Writeln('                             with download checkboxes (filters apply)');
   Writeln('  key set|get|rm             Store, show, or remove a backend key in the');
   Writeln('                             system keyring (needs --backend)');
   Writeln;
@@ -147,6 +149,9 @@ begin
   Writeln('  --downloaded               List filter: only downloaded items');
   Writeln('  --not-downloaded           List filter: only not-yet-downloaded items');
   Writeln('  --limit <n>                Cap the number of items listed');
+  Writeln('  --out-file <path>          Write manifest here instead of stdout');
+  Writeln('  --html                     Manifest as HTML (default: Markdown)');
+  Writeln('  --no-check                 Manifest without download checkboxes');
   Writeln('  --json                     Machine-readable output (status/list/details/');
   Writeln('                             verify/blacklist/allow/relocate)');
   Writeln(Format('  --interval-ms <n>          Base delay between requests (default %d)',
@@ -1482,6 +1487,194 @@ begin
   end;
 end;
 
+{** Escapes the five characters that are special in HTML text and attributes. }
+function HtmlEscape(const s: string): string;
+begin
+  Result := StringReplace(s, '&', '&amp;', [rfReplaceAll]);
+  Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
+  Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
+  Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
+end;
+
+{** Escapes the characters that would break a Markdown link label: the brackets
+  themselves, a backtick (code span), and a less-than (an HTML tag). The
+  backslash is escaped first so it does not double-escape the others. }
+function MdEscape(const s: string): string;
+begin
+  Result := StringReplace(s, '\', '\\', [rfReplaceAll]);
+  Result := StringReplace(Result, '[', '\[', [rfReplaceAll]);
+  Result := StringReplace(Result, ']', '\]', [rfReplaceAll]);
+  Result := StringReplace(Result, '`', '\`', [rfReplaceAll]);
+  Result := StringReplace(Result, '<', '\<', [rfReplaceAll]);
+end;
+
+{** Display name for an indexed item: "creator - title", with fallbacks. }
+function IndexedItemName(const it: TIndexedItem): string;
+begin
+  if (it.creator <> '') and (it.title <> '') then
+    Result := it.creator + ' - ' + it.title
+  else if it.title <> '' then
+    Result := it.title
+  else if it.creator <> '' then
+    Result := it.creator
+  else
+    Result := '(no title)';
+end;
+
+{** Writes a browsable library manifest, one section per backend, from the
+  index. Markdown by default, or HTML with --html (or an .html --out-file).
+  Each item carries a checkbox reflecting the index's recorded download state,
+  so run `verify` first for an accurate picture; --no-check lists items with no
+  checkbox and no download tally. The list filters (--backend, --status,
+  --hidden, --limit, ...) scope the manifest. Output goes to stdout, or to the
+  path given by --out-file. }
+procedure CmdManifest;
+var
+  index: TMagicIndex;
+  f: TItemFilter;
+  backends: TStringArray;
+  items: TIndexedItemArray;
+  lines: TStringList;
+  outFile, name, box, line: string;
+  html, noCheck: boolean;
+  b, i, total, done: LongInt;
+
+  procedure Emit(const s: string);
+  begin
+    lines.Add(s);
+  end;
+
+begin
+  f := ParseItemFilter;
+  outFile := ArgValue('--out-file', '');
+  noCheck := HasFlag('--no-check');
+  html := HasFlag('--html');
+  if (not html) and (outFile <> '') then
+    html := SameText(ExtractFileExt(outFile), '.html')
+      or SameText(ExtractFileExt(outFile), '.htm');
+
+  index := TMagicIndex.Create(ResolveDbPath);
+  lines := TStringList.Create;
+  try
+    if f.backend <> '' then begin
+      SetLength(backends, 1);
+      backends[0] := f.backend;
+    end
+    else
+      backends := index.Backends;
+
+    total := 0;
+    done := 0;
+
+    if html then begin
+      Emit('<!doctype html>');
+      Emit('<html lang="en">');
+      Emit('<head>');
+      Emit('<meta charset="utf-8">');
+      Emit('<meta name="viewport" content="width=device-width, initial-scale=1">');
+      Emit('<title>magicdl library manifest</title>');
+      Emit('<style>');
+      Emit('body{font-family:system-ui,sans-serif;max-width:50rem;' +
+        'margin:2rem auto;padding:0 1rem;line-height:1.5}');
+      Emit('h2{border-bottom:1px solid #ccc;padding-bottom:.2rem;margin-top:2rem}');
+      Emit('ul{list-style:none;padding-left:0}');
+      Emit('li{padding:.1rem 0}');
+      Emit('input{margin-right:.5rem}');
+      Emit('.id{color:#888;font-size:.85em;margin-left:.4rem}');
+      Emit('</style>');
+      Emit('</head>');
+      Emit('<body>');
+      Emit('<h1>Library manifest</h1>');
+    end
+    else
+      Emit('# Library manifest');
+
+    for b := 0 to High(backends) do begin
+      f.backend := backends[b];
+      items := index.ListItems(f);
+      if Length(items) = 0 then
+        continue;
+
+      if html then begin
+        Emit('<h2>' + HtmlEscape(backends[b]) + '</h2>');
+        Emit('<ul>');
+      end
+      else begin
+        Emit('');
+        Emit('## ' + backends[b]);
+        Emit('');
+      end;
+
+      for i := 0 to High(items) do begin
+        Inc(total);
+        if items[i].downloaded then
+          Inc(done);
+        name := IndexedItemName(items[i]);
+
+        if html then begin
+          line := '<li>';
+          if not noCheck then
+            if items[i].downloaded then
+              line := line + '<input type="checkbox" checked disabled>'
+            else
+              line := line + '<input type="checkbox" disabled>';
+          if items[i].pageUrl <> '' then
+            line := line + '<a href="' + HtmlEscape(items[i].pageUrl) + '">' +
+              HtmlEscape(name) + '</a>'
+          else
+            line := line + HtmlEscape(name);
+          line := line + '<span class="id">' + HtmlEscape(items[i].backendId) +
+            '</span></li>';
+        end
+        else begin
+          if noCheck then
+            box := '- '
+          else if items[i].downloaded then
+            box := '- [x] '
+          else
+            box := '- [ ] ';
+          if items[i].pageUrl <> '' then
+            line := box + '[' + MdEscape(name) + '](' + items[i].pageUrl + ')'
+          else
+            line := box + MdEscape(name);
+          line := line + ' `' + items[i].backendId + '`';
+        end;
+        Emit(line);
+      end;
+
+      if html then
+        Emit('</ul>');
+    end;
+
+    if html then begin
+      if noCheck then
+        Emit(Format('<p>%d item(s).</p>', [total]))
+      else
+        Emit(Format('<p>%d of %d item(s) downloaded.</p>', [done, total]));
+      Emit('</body>');
+      Emit('</html>');
+    end
+    else begin
+      Emit('');
+      if noCheck then
+        Emit(Format('%d item(s).', [total]))
+      else
+        Emit(Format('%d of %d item(s) downloaded.', [done, total]));
+    end;
+
+    if outFile <> '' then begin
+      outFile := ExpandPathVars(outFile);
+      lines.SaveToFile(outFile);
+      gLog.Info(Format('Wrote %d item(s) to %s.', [total, outFile]));
+    end
+    else
+      Write(lines.Text);
+  finally
+    lines.Free;
+    index.Free;
+  end;
+end;
+
 {** Reads a secret from standard input without echoing it to the terminal. The
   prompt goes to standard error so `key get` style piping is not disturbed. When
   input is not a terminal (a pipe), the line is read as-is. Trailing and leading
@@ -1582,6 +1775,7 @@ begin
         'details': CmdDetails;
         'relocate': CmdRelocate;
         'import': CmdImport;
+        'manifest': CmdManifest;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
         'key': CmdKey;

@@ -242,6 +242,25 @@ magicdl details <id>           # one item's versions and files
 
 Add `--json` to `status`, `list`, or `details` for machine-readable output.
 
+### Manifest
+
+`manifest` writes a browsable inventory of the library, one section per backend,
+in Markdown (default) or HTML. Each item is a checkbox that is ticked when the
+index records the item as downloaded, so it doubles as a download checklist.
+
+```
+magicdl manifest                              # Markdown to stdout
+magicdl manifest --out-file library.md        # write Markdown to a file
+magicdl manifest --html --out-file library.html
+magicdl manifest --backend itchio --no-check  # plain list, no checkboxes
+```
+
+The checkbox reflects the index's recorded state. Run `magicdl verify` first for
+an accurate picture of what is actually on disk. The list filters (`--backend`,
+`--status`, `--hidden`, `--limit`, and so on) scope the manifest the same way
+they scope `list`. With `--out-file`, an `.html` extension selects HTML without
+needing `--html`.
+
 ### Maintain the collection
 
 ```

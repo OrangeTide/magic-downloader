@@ -77,6 +77,20 @@ skips them. Matching is by name. Use
 .B \-\-dry\-run
 to review matches before marking.
 .TP
+.B manifest
+Write a browsable library manifest, one section per backend, in Markdown
+(default) or HTML with
+.BR \-\-html .
+Each item is a checkbox, ticked when the index records it as downloaded, so run
+.B verify
+first for an accurate picture.
+.B \-\-no\-check
+lists items without checkboxes.
+.B \-\-out\-file
+writes to a file instead of standard output (an
+.B .html
+extension selects HTML). The list filters scope the manifest.
+.TP
 .BI "key " "set|get|rm"
 Manage a backend's key in the system keyring; needs
 .BR \-\-backend .
@@ -167,6 +181,18 @@ Only items that are, or are not, downloaded.
 .TP
 .BI "\-\-limit " n
 Cap the number of items.
+.SS manifest
+.TP
+.BI "\-\-out\-file " path
+Write the manifest to this file instead of standard output. An
+.B .html
+extension selects HTML output.
+.TP
+.B \-\-html
+Write the manifest as HTML rather than Markdown.
+.TP
+.B \-\-no\-check
+Omit the download checkboxes and the download tally.
 .SS Output and pacing
 .TP
 .B \-\-json
