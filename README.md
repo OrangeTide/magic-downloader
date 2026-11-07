@@ -31,7 +31,10 @@ Working:
 Planned:
 
  * gumroad
- * Amazon Music Library
+ * amazon (audiobooks and music)
+
+Also planned: more `--scope` sources, such as a Bandcamp favorites list or an
+Amazon audiobook series.
 
 ## Requirements
 
@@ -233,8 +236,7 @@ magicdl sync --backend drivethrurpg --app-key-file .appkey-dtrpg --from-index --
    list filters such as `--not-downloaded` to fetch only what you are missing.
    This is the fast path for a large library you have already indexed.
 
-A fourth option, `--scope`, narrows either `index` or `sync` to a subset of the
-collection instead of the whole thing:
+`--scope` narrows either `index` or `sync` to a subset of the collection:
 
 ```
 magicdl sync --backend itchio --scope https://itch.io/b/520/some-bundle --out <dir>
@@ -307,7 +309,12 @@ magicdl verify --rescan --out <dir>     # relocate files you moved, matched by h
 magicdl blacklist <id> --reason "dup"   # sync will skip these items
 magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
+magicdl import <dir> --backend bandcamp # mark items already in a local library
 ```
+
+`import` scans a local `Artist/YYYY - Album` library and marks indexed items it
+already holds, so `sync` skips them. Matching is by name; add `--dry-run` to
+review the matches first.
 
 ## How it stores things
 
