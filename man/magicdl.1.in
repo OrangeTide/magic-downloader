@@ -101,10 +101,20 @@ can then adopt them. For each
 host that owns exactly one indexed item, the files sitting directly under the
 host are moved into
 .IR <user> .itch.io/ <slug> .
-A host that owns several items is left alone, since a loose file there cannot be
-assigned to one item without hashing it against the store. Slug subfolders and
-other directories are left in place. Only itch.io, which imports by path,
-supports this. Use
+This pass is offline.
+.IP
+With
+.B \-\-hash
+it also handles a host that owns several items, where a loose file cannot be
+placed by path alone. It resolves each owned item's files from the store to
+learn their hashes, hashes the loose files, and moves each under the slug whose
+upload hash it matches. A loose file matching no upload is left in place. This
+costs one store request per owned item on such a host, so
+.BI \-\-max\-owned " n"
+skips a host that owns more than
+.I n
+items. Slug subfolders and other directories are left alone. Only itch.io,
+which imports by path, supports this. Use
 .B \-\-dry\-run
 to review the moves first.
 .TP
@@ -281,6 +291,19 @@ Write the manifest as HTML rather than Markdown.
 .TP
 .B \-\-no\-check
 Omit the download checkboxes and the download tally.
+.SS reorganize
+.TP
+.B \-\-hash
+Also sort the loose files of multi\-owner hosts by matching their hashes against
+the store's uploads (otherwise such hosts are left for a later run).
+.TP
+.BI "\-\-max\-owned " n
+With
+.BR \-\-hash ,
+skip a host that owns more than
+.I n
+items, so a host with many owned items and few loose files does not cost a
+request per item. Unset or 0 means no limit.
 .SS Output and pacing
 .TP
 .B \-\-json

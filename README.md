@@ -350,13 +350,24 @@ If an old archive keeps a creator's files loose under `<user>.itch.io/` with no
 per-item folder, `import` cannot adopt them. `reorganize` prepares such an
 archive: for each host that owns exactly one indexed item, it moves the loose
 files into that item's `<user>.itch.io/<slug>` folder, so `import` adopts them
-on the next run. A host that owns several items is left alone, since a loose
-file there cannot be assigned to one item by path. Review the moves with
-`--dry-run` first:
+on the next run. This pass is offline. Review the moves with `--dry-run` first:
 
 ```
 magicdl reorganize --backend itchio ~/itch-archive --dry-run
 magicdl reorganize --backend itchio ~/itch-archive
+```
+
+A host that owns several items is left alone by default, since a loose file
+there cannot be placed by path. `--hash` handles those too: it resolves each
+owned item's files from the store to learn their MD5 hashes, hashes the loose
+files, and moves each under the slug whose upload hash it matches. A file that
+matches no upload is left where it is. This costs one store request per owned
+item on such a host, so `--max-owned <n>` skips a host that owns more than `n`
+items, keeping a host with many items and few loose files from costing a request
+per item.
+
+```
+magicdl reorganize --backend itchio --hash --max-owned 700 ~/itch-archive
 ```
 
 Files are moved, never copied or deleted, and a file is left in place if one of
