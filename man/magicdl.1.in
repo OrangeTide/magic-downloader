@@ -76,6 +76,18 @@ music library so
 skips them. Matching is by name. Use
 .B \-\-dry\-run
 to review matches before marking.
+.TP
+.BI "key " "set|get|rm"
+Manage a backend's key in the system keyring; needs
+.BR \-\-backend .
+.B set
+reads a key from the terminal without echoing it (or from standard input when
+piped) and stores it;
+.B get
+prints the stored key;
+.B rm
+removes it. Once a key is stored, commands read it from the keyring
+automatically.
 .SH OPTIONS
 .SS Selection and credentials
 .TP
@@ -88,7 +100,7 @@ Store account or fan\-page handle (Bandcamp).
 .TP
 .BI "\-\-app\-key " key
 Application or API key (DriveThruRPG, itch.io). Exposes the key in the process
-list; prefer the file form.
+list; prefer the keyring or the file form.
 .TP
 .BI "\-\-app\-key\-file " path
 Read the application or API key from a file, so it never appears on the command
@@ -195,9 +207,27 @@ Games, tools, and assets. Authenticates with an API key from
 itch.io/user/settings/api\-keys.
 .SH AUTHENTICATION
 Bandcamp uses your logged\-in browser session cookies. DriveThruRPG and itch.io
-use an application or API key; store it in a file and pass
+use an application or API key.
+.PP
+The preferred store for a key is the system keyring, the freedesktop Secret
+Service served by GNOME Keyring or KWallet, reached through
+.B libsecret
+loaded at run time. Store a key with
+.RB "\[dq]" "magicdl key set \-\-backend " name "\[dq]"
+and later commands read it automatically. When no keyring is available, keep
+the key in a file readable only by you and pass
 .B \-\-app\-key\-file
 so the secret does not appear in the process list.
+.PP
+A key is resolved in this order, first match wins:
+.BR \-\-app\-key ,
+then
+.B \-\-app\-key\-file
+or the config
+.BR app\-key\-file ,
+then the keyring, then a bare
+.B app\-key
+in the config. A configured key file therefore overrides the keyring.
 .SH FILES
 .TP
 .B ~/.config/magicdl/config.ini

@@ -10,11 +10,12 @@ program magicdl;
 {$mode objfpc}{$H+}
 
 uses
-  {$IFDEF UNIX}cwstring,{$ENDIF}  { UTF-8 default codepage from the locale, so
-    Unicode paths are stored and read unchanged (no single-byte transcode) }
+  {$IFDEF UNIX}cwstring, termio,{$ENDIF}  { cwstring: UTF-8 default codepage
+    from the locale, so Unicode paths are stored and read unchanged (no
+    single-byte transcode). termio: turn off echo while reading a key. }
   Classes, SysUtils, contnrs, fpjson,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
-  mdconfig,
+  mdconfig, mdkeyring,
   mdbackend_bandcamp,      { registers the bandcamp backend }
   mdbackend_drivethrurpg,  { registers the drivethrurpg backend }
   mdbackend_itchio;        { registers the itchio backend }
@@ -116,11 +117,13 @@ begin
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
   Writeln('  import <dir>               Mark items already in an Artist/Album library');
+  Writeln('  key set|get|rm             Store, show, or remove a backend key in the');
+  Writeln('                             system keyring (needs --backend)');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
   Writeln('  --user <name>              Store account/user name (bandcamp)');
-  Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the file form');
+  Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
   Writeln('                             Manager JSON, or Netscape cookies.txt)');
@@ -158,6 +161,9 @@ begin
     IncludeTrailingPathDelimiter(gConfig.ConfigDir), 'config.ini');
   Writeln('  [general] and [backend.<name>] sections set db, out, user,');
   Writeln('  app-key-file, cookies, format. Command-line options win.');
+  Writeln;
+  Writeln('Key resolution: --app-key, then --app-key-file or config app-key-file,');
+  Writeln('  then the system keyring (magicdl key set), then config app-key.');
   Writeln;
   names := RegisteredBackendNames;
   Write('Registered backends:');
@@ -236,15 +242,21 @@ begin
   if Result.user = '' then
     Result.user := gConfig.Get(backendName, 'user', '');
   Result.apiKey := ArgValue('--app-key', '');
-  { Prefer a key file so the secret is not exposed in the process command line.
-    A bare app-key in the config file is also fine: the file is not readable by
-    other processes the way a command line is. }
+  { Key resolution, most explicit first:
+      1. --app-key on the command line (discouraged: visible to other processes)
+      2. a key file, from --app-key-file or the config app-key-file
+      3. the system keyring (see `magicdl key set`)
+      4. a bare app-key in the config file
+    The keyring is tried before the plaintext config value so a stored secret
+    is preferred to one written on disk. }
   if Result.apiKey = '' then begin
     keyFile := ArgValue('--app-key-file', '');
     if keyFile = '' then
       keyFile := gConfig.Get(backendName, 'app-key-file', '');
     if keyFile <> '' then
       Result.apiKey := ReadKeyFile(ExpandPathVars(keyFile))
+    else if KeyringLookup(backendName, Result.apiKey) then
+      { found in the keyring }
     else
       Result.apiKey := gConfig.Get(backendName, 'app-key', '');
   end;
@@ -1470,6 +1482,79 @@ begin
   end;
 end;
 
+{** Reads a secret from standard input without echoing it to the terminal. The
+  prompt goes to standard error so `key get` style piping is not disturbed. When
+  input is not a terminal (a pipe), the line is read as-is. Trailing and leading
+  whitespace are trimmed, matching ReadKeyFile. }
+function PromptSecret(const prompt: string): string;
+{$IFDEF UNIX}
+var
+  oldState, noEcho: TTermios;
+  haveTty: boolean;
+{$ENDIF}
+begin
+  Write(StdErr, prompt);
+  Flush(StdErr);
+  {$IFDEF UNIX}
+  haveTty := TCGetAttr(StdInputHandle, oldState) = 0;
+  if haveTty then begin
+    noEcho := oldState;
+    noEcho.c_lflag := noEcho.c_lflag and (not ECHO);
+    TCSetAttr(StdInputHandle, TCSANOW, noEcho);
+  end;
+  ReadLn(Result);
+  if haveTty then begin
+    TCSetAttr(StdInputHandle, TCSANOW, oldState);
+    Writeln(StdErr);  { the newline the suppressed Enter did not print }
+  end;
+  {$ELSE}
+  ReadLn(Result);
+  {$ENDIF}
+  Result := Trim(Result);
+end;
+
+{** Stores, shows, or removes a backend's key in the system keyring. The action
+  is the first positional word (set/get/rm) and --backend names the backend. }
+procedure CmdKey;
+var
+  action, backendName, value: string;
+begin
+  action := '';
+  if ParamCount >= 2 then
+    action := ParamStr(2);
+  if (action <> 'set') and (action <> 'get') and (action <> 'rm') then
+    raise EMagicError.Create('Usage: key set|get|rm --backend <name>');
+  RequireBackend(backendName);  { validates --backend }
+  if not KeyringAvailable then
+    raise EMagicError.Create('No system keyring is available (' +
+      KeyringLastError + '). Use --app-key-file instead.');
+
+  if action = 'set' then begin
+    value := PromptSecret('Key for ' + backendName + ': ');
+    if value = '' then
+      raise EMagicError.Create('No key entered; nothing was stored.');
+    if not KeyringStore(backendName, value) then
+      raise EMagicError.Create('Could not store the key: ' + KeyringLastError + '.');
+    gLog.Info('Stored the ' + backendName + ' key in the keyring.');
+  end
+  else if action = 'get' then begin
+    if KeyringLookup(backendName, value) then
+      Writeln(value)
+    else if KeyringLastError <> '' then
+      raise EMagicError.Create('Keyring error: ' + KeyringLastError + '.')
+    else
+      raise EMagicError.CreateFmt('No key is stored for "%s".', [backendName]);
+  end
+  else begin  { rm }
+    if KeyringClear(backendName) then
+      gLog.Info('Removed the ' + backendName + ' key from the keyring.')
+    else if KeyringLastError <> '' then
+      raise EMagicError.Create('Could not remove the key: ' + KeyringLastError + '.')
+    else
+      gLog.Info('No key was stored for ' + backendName + '; nothing to remove.');
+  end;
+end;
+
 { ---- Main ---- }
 
 var
@@ -1499,6 +1584,7 @@ begin
         'import': CmdImport;
         'blacklist': CmdBlacklist;
         'allow': CmdAllow;
+        'key': CmdKey;
         '', '-h', '--help', 'help':
           PrintUsage;
         else begin

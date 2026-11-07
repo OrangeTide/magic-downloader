@@ -43,12 +43,18 @@ Planned:
    tree, so that package must be present.
  * `make`
  * The SQLite and OpenSSL shared libraries (used at run time).
+ * Optional: `libsecret-1-0` and a running keyring (GNOME Keyring or KWallet),
+   for storing backend keys in the keyring. magicdl loads `libsecret` at run
+   time, so it is not needed to build, and the `key` command simply reports that
+   no keyring is available when it is absent.
 
 On a Debian or Ubuntu system:
 
 ```
 sudo apt-get install fpc fpc-source fp-units-fcl fp-units-db make \
     libsqlite3-0 libssl3
+# optional, for keyring support:
+sudo apt-get install libsecret-1-0 gnome-keyring
 ```
 
 ## Building
@@ -89,17 +95,49 @@ You also pass `--user <name>`, your Bandcamp fan page handle
 
 Both use an application key. Create a DriveThruRPG key on the "Library App Keys"
 page of your account, or an itch.io key at
-`https://itch.io/user/settings/api-keys`. Store it in a file and pass the file,
-so the key does not appear on the command line:
+`https://itch.io/user/settings/api-keys`.
+
+The recommended place to keep the key is your system keyring. On Linux that is
+the freedesktop Secret Service, served by GNOME Keyring or KWallet. magicdl
+reaches it through `libsecret`, loaded at run time, so it is not a build
+dependency. Store a key once:
 
 ```
-echo 'YOUR_KEY_HERE' > .appkey-dtrpg
+magicdl key set --backend itchio          # prompts, input is not echoed
+magicdl key set --backend drivethrurpg
+```
+
+After that, commands read the key from the keyring automatically. You can check
+or remove a stored key:
+
+```
+magicdl key get --backend itchio          # prints the key
+magicdl key rm  --backend itchio          # removes it
+```
+
+`key set` also reads from standard input, so you can pipe a key in:
+
+```
+echo 'YOUR_KEY_HERE' | magicdl key set --backend itchio
+```
+
+If no keyring is available, a key file is the fallback. Keep the key in a file
+readable only by you and pass it, so the key does not appear on the command
+line:
+
+```
+install -m600 /dev/stdin .appkey-dtrpg <<< 'YOUR_KEY_HERE'
 magicdl index --backend drivethrurpg --app-key-file .appkey-dtrpg
-magicdl index --backend itchio --app-key-file .appkey-itch
 ```
 
 `--app-key <key>` also works but exposes the key to other local processes
-through the process list, so the file form is preferred.
+through the process list, so prefer the keyring or a key file.
+
+magicdl resolves a backend's key in this order, stopping at the first that is
+set: `--app-key`, then `--app-key-file` or the config `app-key-file`, then the
+system keyring, then a bare `app-key` in the config file. So a configured key
+file takes precedence over the keyring; to let the keyring take over, remove
+`app-key-file` from the backend's config section.
 
 ## Configuration
 
@@ -123,9 +161,11 @@ db  = ~/.local/share/magicdl/magicdl.sqlite
 out = ~/media/collections
 
 [backend.drivethrurpg]
+# Only if you are not using the keyring (magicdl key set):
 app-key-file = ~/.config/magicdl/keys/dtrpg
 
 [backend.itchio]
+# Only if you are not using the keyring:
 app-key-file = ~/.config/magicdl/keys/itch
 
 [backend.bandcamp]

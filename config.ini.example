@@ -31,15 +31,21 @@ out = ~/media/collections
 ;retries = 5
 ;timeout-ms = 30000
 
+; Backend keys are best kept in the system keyring, not in a file. Store one
+; with "magicdl key set --backend drivethrurpg" (or itchio); commands then read
+; it automatically. The app-key-file lines below are only for setups without a
+; keyring. A configured app-key-file overrides the keyring, so leave it unset
+; to let the keyring take over.
+
 [backend.drivethrurpg]
 ; File holding the DriveThruRPG application key, so it stays off the command
 ; line. Create the key on the "Library App Keys" page of your account.
-app-key-file = ~/.config/magicdl/keys/dtrpg
+;app-key-file = ~/.config/magicdl/keys/dtrpg
 
 [backend.itchio]
 ; File holding the itch.io API key, from
 ; https://itch.io/user/settings/api-keys.
-app-key-file = ~/.config/magicdl/keys/itch
+;app-key-file = ~/.config/magicdl/keys/itch
 
 [backend.bandcamp]
 ; Your Bandcamp fan page handle (bandcamp.com/<user>).
