@@ -106,6 +106,7 @@ begin
   Writeln;
   Writeln('Commands:');
   Writeln('  list-backends              List available backends');
+  Writeln('  scopes                     List a backend''s --scope refs (itchio: bundles)');
   Writeln('  index                      Index a collection (no downloads)');
   Writeln('  sync [<id>...]             Download items: full listing, given ids,');
   Writeln('                             or --from-index to use the stored index');
@@ -126,8 +127,8 @@ begin
   Writeln('  --backend <name>           Backend to use');
   Writeln('  --user <name>              Account name: the bandcamp fan handle, or');
   Writeln('                             which keyring account to use (see key)');
-  Writeln('  --scope <ref>              Index/sync only a subset: an itch.io bundle');
-  Writeln('                             link (per-backend; see the backend docs)');
+  Writeln('  --scope <ref>              Index/sync only a subset (itchio: a bundle');
+  Writeln('                             link, id, or title; see the scopes command)');
   Writeln('  --refresh                  Ignore the cached --scope result and re-fetch');
   Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
@@ -619,6 +620,42 @@ begin
     ForAccount := Format(' for "%s"', [backend.AccountLabel])
   else
     ForAccount := '';
+end;
+
+{** Lists the scopes a backend offers for --scope, one per line as
+  "<reference>  <description>". For itch.io these are the account's owned
+  bundles; the reference is a bundle link to pass to --scope. }
+procedure CmdScopes;
+var
+  backendClass: TMagicBackendClass;
+  backend: TMagicBackend;
+  s: TSession;
+  ctx: TMagicContext;
+  scopes: TScopeInfoArray;
+  backendName: string;
+  i: LongInt;
+begin
+  backendClass := RequireBackend(backendName);
+  s := OpenSession;
+  try
+    ctx := BuildContext(s.index, s.cookies, s.http, backendName);
+    backend := backendClass.Create(ctx);
+    try
+      LoadCookies(backendClass, s.cookies);
+      backend.Authenticate;
+      scopes := backend.ListScopes;
+      if Length(scopes) = 0 then begin
+        gLog.Info(Format('%s offers no listable scopes.', [backendName]));
+        exit;
+      end;
+      for i := 0 to High(scopes) do
+        Writeln(scopes[i].reference, '  ', scopes[i].caption);
+    finally
+      backend.Free;
+    end;
+  finally
+    CloseSession(s);
+  end;
 end;
 
 procedure CmdIndex;
@@ -2087,6 +2124,7 @@ begin
     try
       case command of
         'list-backends': CmdListBackends;
+        'scopes': CmdScopes;
         'index': CmdIndex;
         'sync': CmdSync;
         'verify': CmdVerify;

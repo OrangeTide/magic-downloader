@@ -30,6 +30,14 @@ type
     dryRun: boolean;
   end;
 
+  {** One scope a backend can offer to --scope: a reference to pass and a human
+    label. For itch.io these are the account's owned bundles. }
+  TScopeInfo = record
+    reference: string;  { pass to --scope }
+    caption: string;    { human description }
+  end;
+  TScopeInfoArray = array of TScopeInfo;
+
   TMagicBackend = class;
   TMagicBackendClass = class of TMagicBackend;
 
@@ -89,6 +97,12 @@ type
       EMagicError on a malformed or unsupported reference. Only called when
       SupportsScope is true. }
     function ListScope(const scopeRef: string): TCollectionItemArray; virtual;
+
+    {** The scopes this backend can enumerate for --scope, for the `scopes`
+      command: itch.io returns the account's owned bundles. The default is none,
+      meaning the backend cannot list its scopes even if it accepts a --scope
+      reference. Called after Authenticate. }
+    function ListScopes: TScopeInfoArray; virtual;
 
     {** Resolves the cover image URL for an item, or '' when none exists. }
     function ResolveCoverUrl(const item: TCollectionItem): string; virtual; abstract;
@@ -152,6 +166,11 @@ begin
   Result := nil;
   raise EMagicError.CreateFmt(
     'Backend "%s" does not support --scope.', [BackendName]);
+end;
+
+function TMagicBackend.ListScopes: TScopeInfoArray;
+begin
+  ListScopes := nil;
 end;
 
 procedure RegisterBackend(aClass: TMagicBackendClass);

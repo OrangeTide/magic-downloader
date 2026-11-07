@@ -236,20 +236,36 @@ magicdl sync --backend drivethrurpg --app-key-file .appkey-dtrpg --from-index --
    list filters such as `--not-downloaded` to fetch only what you are missing.
    This is the fast path for a large library you have already indexed.
 
-`--scope` narrows either `index` or `sync` to a subset of the collection:
+`--scope` narrows either `index` or `sync` to a subset of the collection. For
+itch.io a scope is one of your bundles. List them with `scopes`, which prints
+each bundle's link and title:
 
 ```
-magicdl sync --backend itchio --scope https://itch.io/b/520/some-bundle --out <dir>
-magicdl index --backend itchio --scope https://itch.io/b/520/some-bundle
+magicdl scopes --backend itchio
+# https://itch.io/b/2701/-massive-inventory-bundle-  Massive Inventory Bundle (26 games)
+# ...
 ```
 
-For itch.io, the scope is a bundle link (`https://itch.io/b/<id>/<slug>`, or just
-the numeric id). magicdl reads the bundle's game list and syncs only the items
-you own from it. A scoped `index` adds the bundle's items to the index without
-marking the rest of your library removed.
+Then pass a bundle to `--scope` as its link, its numeric id, or a unique part of
+its title:
+
+```
+magicdl sync --backend itchio --scope https://itch.io/b/2701/... --out <dir>
+magicdl sync --backend itchio --scope 2701 --out <dir>
+magicdl sync --backend itchio --scope "Massive Inventory" --out <dir>
+```
+
+magicdl reads the bundle's games and syncs only the items you own from it. A
+scoped `index` adds the bundle's items to the index without marking the rest of
+your library removed.
+
+Bundle *download* links (`https://itch.io/bundle/download/<token>`) are not
+accepted: they need a browser session rather than the API key. Use `scopes` to
+get the plain bundle link instead.
+
 `--scope` is a general mechanism, so other backends can later accept their own
-references (a collection, a series, a favorites list); each backend documents
-what it takes, and a backend that does not support it says so.
+references, and `scopes` can list them (a collection, a series, a favorites
+list). A backend that does not support scoping says so.
 
 Resolving a scope can take many paced requests (a large itch.io bundle lists
 its games, then your ownership is checked in batches), with a progress line as

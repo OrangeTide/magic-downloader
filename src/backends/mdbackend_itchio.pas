@@ -16,13 +16,15 @@ unit mdbackend_itchio;
   id is the composite "<downloadKeyId>:<gameId>". That lets sync resolve an item
   from the index alone, without a listing.
 
-  Scope support (--scope) accepts an itch.io bundle link and syncs only that
-  bundle's items. A bundle's games are listed by a public JSON endpoint,
+  Scope support (--scope) accepts an itch.io bundle link, a bundle id, or a
+  bundle title, and syncs only that bundle's items.
 
-    GET  https://itch.io/bundle/<bundleId>/games.json  -> games (with ids)
+    GET  /profile/owned-bundles              -> the account's bundles (for list)
+    GET  /bundles/<id>/bundle-games?page=N   -> the bundle's games (with ids)
 
-  whose game ids are intersected with the owned keys (owned-keys accepts a
-  game_ids filter), so only items the user actually owns are returned.
+  The bundle's game ids are intersected with the owned keys (owned-keys accepts
+  a game_ids filter), so only items the user actually owns are returned. The
+  `scopes` command lists owned bundles so the user can find a link or id.
 
   PUBLIC DOMAIN (CC0-1.0) }
 
@@ -41,6 +43,8 @@ type
     function FetchOwnedKeys(const extraQuery: string): TCollectionItemArray;
     {** The numeric game ids of a bundle, from its public games.json. }
     function FetchBundleGameIds(const bundleId: string): TStringArray;
+    {** The account's owned bundles, from /profile/owned-bundles. }
+    function FetchOwnedBundles: TScopeInfoArray;
   public
     class function BackendName: string; override;
     procedure Authenticate; override;
@@ -50,6 +54,7 @@ type
     function ListCollection: TCollectionItemArray; override;
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
+    function ListScopes: TScopeInfoArray; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; override;
@@ -285,38 +290,92 @@ begin
   end;
 end;
 
-{** The numeric game ids of a bundle, read from the public games.json endpoint. }
+{** The numeric game ids of a bundle, from the authenticated bundle-games API.
+  It is paginated and works for any bundle the account owns, unlike the public
+  games.json, which some bundles do not serve. }
 function TItchIoBackend.FetchBundleGameIds(const bundleId: string): TStringArray;
 var
+  page, i, n: LongInt;
   respText: string;
   data: TJSONData;
-  gamesArr: TJSONArray;
-  i, n: LongInt;
+  arr: TJSONArray;
+  game: TJSONObject;
   gid: Int64;
 begin
   Result := nil;
-  respText := fCtx.http.Get(
-    Format('https://itch.io/bundle/%s/games.json', [bundleId]), pcLight);
+  page := 1;
+  while true do begin
+    respText := fCtx.http.Get(BASE_URL + Format(
+      '/bundles/%s/bundle-games?page=%d', [bundleId, page]), pcLight);
+    data := GetJSON(respText);
+    try
+      { A page past the last returns bundle_games as an empty array (or object),
+        so anything that is not a non-empty array ends the loop. }
+      if not (data is TJSONObject)
+        or not (TJSONObject(data).Find('bundle_games') is TJSONArray) then
+        break;
+      arr := TJSONArray(TJSONObject(data).Find('bundle_games'));
+      if arr.Count = 0 then
+        break;
+      for i := 0 to arr.Count - 1 do
+        if (arr.Items[i] is TJSONObject)
+          and (TJSONObject(arr.Items[i]).Find('game') is TJSONObject) then begin
+          game := TJSONObject(TJSONObject(arr.Items[i]).Objects['game']);
+          gid := game.Get('id', Int64(0));
+          if gid <> 0 then begin
+            n := Length(Result);
+            SetLength(Result, n + 1);
+            Result[n] := IntToStr(gid);
+          end;
+        end;
+    finally
+      data.Free;
+    end;
+    Inc(page);
+  end;
+end;
+
+function TItchIoBackend.FetchOwnedBundles: TScopeInfoArray;
+var
+  respText: string;
+  data: TJSONData;
+  arr: TJSONArray;
+  bundle: TJSONObject;
+  i, n: LongInt;
+  info: TScopeInfo;
+begin
+  Result := nil;
+  respText := fCtx.http.Get(BASE_URL + '/profile/owned-bundles', pcLight);
   data := GetJSON(respText);
   try
     if not (data is TJSONObject)
-      or not (TJSONObject(data).Find('games') is TJSONArray) then
-      raise EMagicError.CreateFmt(
-        'itch.io bundle %s has no games listing (is the link right?).',
-        [bundleId]);
-    gamesArr := TJSONArray(TJSONObject(data).Find('games'));
-    for i := 0 to gamesArr.Count - 1 do
-      if gamesArr.Items[i] is TJSONObject then begin
-        gid := TJSONObject(gamesArr.Items[i]).Get('id', Int64(0));
-        if gid <> 0 then begin
-          n := Length(Result);
-          SetLength(Result, n + 1);
-          Result[n] := IntToStr(gid);
-        end;
-      end;
+      or not (TJSONObject(data).Find('bundle_keys') is TJSONArray) then
+      exit;
+    arr := TJSONArray(TJSONObject(data).Find('bundle_keys'));
+    for i := 0 to arr.Count - 1 do begin
+      if not (arr.Items[i] is TJSONObject)
+        or not (TJSONObject(arr.Items[i]).Find('bundle') is TJSONObject) then
+        continue;
+      bundle := TJSONObject(TJSONObject(arr.Items[i]).Objects['bundle']);
+      info.reference := bundle.Get('url', '');
+      info.caption := bundle.Get('title', '');
+      if bundle.Find('games_count') <> nil then
+        info.caption := info.caption +
+          Format(' (%d games)', [bundle.Get('games_count', Int64(0))]);
+      if info.reference = '' then
+        continue;
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n] := info;
+    end;
   finally
     data.Free;
   end;
+end;
+
+function TItchIoBackend.ListScopes: TScopeInfoArray;
+begin
+  ListScopes := FetchOwnedBundles;
 end;
 
 function TItchIoBackend.ListScope(
@@ -324,15 +383,42 @@ function TItchIoBackend.ListScope(
 const
   CHUNK = 50;  { owned-keys game_ids accepts at most 50 per request }
 var
-  bundleId: string;
+  bundleId, low: string;
   gameIds: TStringArray;
   seen: TStringList;
   batch: TCollectionItemArray;
+  bundles: TScopeInfoArray;
   csv: string;
-  i, j, n: LongInt;
+  i, j, n, k, nmatch, matchIdx: LongInt;
 begin
   Result := nil;
   bundleId := ExtractBundleId(scopeRef);
+  if bundleId = '' then begin
+    low := LowerCase(scopeRef);
+    if Pos('/bundle/download/', low) > 0 then
+      raise EMagicError.Create(
+        'itch.io bundle download links are not supported: they need a browser ' +
+        'session, not the API key. Run "magicdl scopes --backend itchio" to ' +
+        'list your bundles, then pass a bundle link or its id to --scope.');
+    { Not a link or id: match the reference against owned bundle titles. }
+    bundles := FetchOwnedBundles;
+    nmatch := 0;
+    matchIdx := -1;
+    for k := 0 to High(bundles) do
+      if Pos(low, LowerCase(bundles[k].caption)) > 0 then begin
+        Inc(nmatch);
+        matchIdx := k;
+      end;
+    if nmatch = 0 then
+      raise EMagicError.CreateFmt(
+        'No owned itch.io bundle matches "%s". Run "magicdl scopes ' +
+        '--backend itchio" to see them.', [scopeRef]);
+    if nmatch > 1 then
+      raise EMagicError.CreateFmt(
+        '"%s" matches %d owned bundles; use a bundle link or its id instead.',
+        [scopeRef, nmatch]);
+    bundleId := ExtractBundleId(bundles[matchIdx].reference);
+  end;
   if bundleId = '' then
     raise EMagicError.CreateFmt(
       'Not an itch.io bundle link: "%s". Expected something like ' +

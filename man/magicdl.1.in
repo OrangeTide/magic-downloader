@@ -24,6 +24,13 @@ named by
 .B list\-backends
 List the available backends.
 .TP
+.B scopes
+List the scopes a backend offers for
+.BR \-\-scope ,
+one per line as "reference  description". For itch.io these are the account's
+owned bundles, each with a bundle link to pass to
+.BR \-\-scope .
+.TP
 .B index
 Fetch the list of owned content and store it, without downloading files.
 .TP
@@ -137,9 +144,14 @@ or
 to a subset of the collection named by
 .IR ref ,
 instead of the whole collection. The reference is backend specific: for itch.io
-it is a bundle link
-.RB ( https://itch.io/b/ \fIid\fR / \fIslug\fR ", or the numeric " id ),
-and only items you own from that bundle are listed. A scoped
+it is one of your bundles, given as a bundle link
+.RB ( https://itch.io/b/ \fIid\fR / \fIslug\fR ), its numeric id, or a unique part
+of its title; run
+.B scopes
+to list them. Only items you own from that bundle are listed. Bundle download
+links
+.RB ( https://itch.io/bundle/download/ \fItoken\fR )
+are not accepted; they need a browser session. A scoped
 .B index
 does not sweep, so it will not mark the rest of your library removed. A backend
 that does not support scoping reports so. A resolved scope is cached under
