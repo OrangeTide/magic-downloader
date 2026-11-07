@@ -235,6 +235,11 @@ bundle's items to the index without marking the rest of your library removed.
 references (a collection, a series, a favorites list); each backend documents
 what it takes, and a backend that does not support it says so.
 
+Resolving a scope can take many paced requests (a large itch.io bundle lists
+its games, then your ownership is checked in batches), with a progress line as
+it goes. The result is cached under `<data dir>/cache` for a day and reused on
+the next run; pass `--refresh` to ignore the cache and re-fetch.
+
 Files land under the output directory in a `Creator - Title` folder per item.
 Set it with `--out <dir>` or the config `out` key; there is no default, so a
 sync or verify without one is an error. Add `--covers` to also fetch cover

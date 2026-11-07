@@ -13,7 +13,7 @@ uses
   {$IFDEF UNIX}cwstring, termio,{$ENDIF}  { cwstring: UTF-8 default codepage
     from the locale, so Unicode paths are stored and read unchanged (no
     single-byte transcode). termio: turn off echo while reading a key. }
-  Classes, SysUtils, contnrs, fpjson,
+  Classes, SysUtils, contnrs, fpjson, DateUtils,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdconfig, mdkeyring,
   mdbackend_bandcamp,      { registers the bandcamp backend }
@@ -127,6 +127,7 @@ begin
   Writeln('  --user <name>              Store account/user name (bandcamp)');
   Writeln('  --scope <ref>              Index/sync only a subset: an itch.io bundle');
   Writeln('                             link (per-backend; see the backend docs)');
+  Writeln('  --refresh                  Ignore the cached --scope result and re-fetch');
   Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
@@ -407,6 +408,169 @@ begin
   index.Commit;
 end;
 
+{** Resolving a scope can take many paced requests (an itch.io bundle lists its
+  games, then owned-keys is queried in batches), so the result is cached on disk
+  for this long and reused until --refresh or the age limit. }
+const
+  SCOPE_CACHE_TTL_SEC = 24 * 60 * 60;  { one day }
+
+{** Path of the cache file for one backend and scope reference. The reference
+  (often a URL) is hashed so the name is filesystem-safe and fixed length. }
+function ScopeCacheFile(const backendName, scopeRef: string): string;
+var
+  h: TSha256;
+  digest: TSha256Digest;
+  dir, key: string;
+begin
+  h := TSha256.Create;
+  try
+    h.Init;
+    if scopeRef <> '' then
+      h.Update(scopeRef[1], Length(scopeRef));
+    h.Final(digest);
+    key := Copy(Sha256ToHex(digest), 1, 16);
+  finally
+    h.Free;
+  end;
+  dir := IncludeTrailingPathDelimiter(gConfig.DataDir) + 'cache';
+  ForceDirectories(dir);
+  ScopeCacheFile := IncludeTrailingPathDelimiter(dir) +
+    Format('scope-%s-%s.json', [backendName, key]);
+end;
+
+{** Writes the resolved scope items to the cache file, stamped with the time. }
+procedure WriteScopeCache(const backendName, scopeRef: string;
+  const items: TCollectionItemArray);
+var
+  root: TJSONObject;
+  arr: TJSONArray;
+  o: TJSONObject;
+  i: LongInt;
+begin
+  root := TJSONObject.Create;
+  try
+    root.Add('scope', scopeRef);
+    root.Add('backend', backendName);
+    root.Add('resolved_at_unix', Int64(DateTimeToUnix(Now)));
+    arr := TJSONArray.Create;
+    for i := 0 to High(items) do begin
+      o := TJSONObject.Create;
+      o.Add('id', items[i].id);
+      o.Add('title', items[i].title);
+      o.Add('artist', items[i].artist);
+      o.Add('itemType', items[i].itemType);
+      o.Add('pageUrl', items[i].pageUrl);
+      o.Add('coverUrl', items[i].coverUrl);
+      o.Add('releaseDate', items[i].releaseDate);
+      o.Add('hidden', items[i].hidden);
+      arr.Add(o);
+    end;
+    root.Add('items', arr);
+    with TStringList.Create do
+      try
+        Text := root.FormatJSON;
+        SaveToFile(ScopeCacheFile(backendName, scopeRef));
+      finally
+        Free;
+      end;
+  finally
+    root.Free;
+  end;
+end;
+
+{** Loads cached scope items into items, returning the cache age in seconds, or
+  -1 when there is no usable, unexpired cache. }
+function ReadScopeCache(const backendName, scopeRef: string;
+  out items: TCollectionItemArray): LongInt;
+var
+  path, raw: string;
+  data: TJSONData;
+  root, o: TJSONObject;
+  arr: TJSONArray;
+  i, age: LongInt;
+  sl: TStringList;
+begin
+  items := nil;
+  Result := -1;
+  path := ScopeCacheFile(backendName, scopeRef);
+  if not FileExists(path) then
+    exit;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(path);
+    raw := sl.Text;
+  finally
+    sl.Free;
+  end;
+  try
+    data := GetJSON(raw);
+  except
+    exit;  { corrupt cache: ignore it }
+  end;
+  try
+    if not (data is TJSONObject) then
+      exit;
+    root := TJSONObject(data);
+    age := LongInt(Int64(DateTimeToUnix(Now)) -
+      root.Get('resolved_at_unix', Int64(0)));
+    if (age < 0) or (age > SCOPE_CACHE_TTL_SEC) then
+      exit;  { expired }
+    if not (root.Find('items') is TJSONArray) then
+      exit;
+    arr := TJSONArray(root.Find('items'));
+    SetLength(items, arr.Count);
+    for i := 0 to arr.Count - 1 do begin
+      items[i] := Default(TCollectionItem);
+      if not (arr.Items[i] is TJSONObject) then
+        continue;
+      o := TJSONObject(arr.Items[i]);
+      items[i].id := o.Get('id', '');
+      items[i].title := o.Get('title', '');
+      items[i].artist := o.Get('artist', '');
+      items[i].itemType := o.Get('itemType', '');
+      items[i].pageUrl := o.Get('pageUrl', '');
+      items[i].coverUrl := o.Get('coverUrl', '');
+      items[i].releaseDate := o.Get('releaseDate', '');
+      items[i].hidden := o.Get('hidden', false);
+    end;
+    Result := age;
+  finally
+    data.Free;
+  end;
+end;
+
+{** Human-readable age such as "3h" or "2d", for the cache message. }
+function HumanAge(seconds: LongInt): string;
+begin
+  if seconds < 90 then
+    HumanAge := Format('%ds', [seconds])
+  else if seconds < 90 * 60 then
+    HumanAge := Format('%dm', [seconds div 60])
+  else if seconds < 48 * 60 * 60 then
+    HumanAge := Format('%dh', [seconds div 3600])
+  else
+    HumanAge := Format('%dd', [seconds div (24 * 3600)]);
+end;
+
+{** Resolves a scope to its items, using the on-disk cache unless --refresh is
+  given or the cache is stale. Fetches and rewrites the cache otherwise. }
+function ResolveScope(backend: TMagicBackend;
+  const backendName, scopeRef: string): TCollectionItemArray;
+var
+  age: LongInt;
+begin
+  if not HasFlag('--refresh') then begin
+    age := ReadScopeCache(backendName, scopeRef, Result);
+    if age >= 0 then begin
+      gLog.Info(Format('Using cached scope (%s old, %d item(s)); ' +
+        '--refresh to update.', [HumanAge(age), Length(Result)]));
+      exit;
+    end;
+  end;
+  Result := backend.ListScope(scopeRef);
+  WriteScopeCache(backendName, scopeRef, Result);
+end;
+
 {** Lists and indexes a scope (a bundle, collection, ...) rather than the whole
   collection. It upserts only the scope's items and does NOT sweep, since it saw
   only part of the collection and must not mark the rest removed. }
@@ -417,7 +581,7 @@ var
   i: LongInt;
 begin
   seen := NowIsoUtc;
-  items := backend.ListScope(scopeRef);
+  items := ResolveScope(backend, backendName, scopeRef);
   for i := 0 to High(items) do
     index.UpsertItem(backendName, items[i], seen);
   index.Commit;

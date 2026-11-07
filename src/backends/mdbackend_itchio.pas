@@ -313,6 +313,12 @@ begin
           Result[n] := batch[j];
         end;
       Inc(i, CHUNK);
+      { Progress: how many of the bundle's games have been checked so far, and
+        how many of them are owned. }
+      if i > Length(gameIds) then
+        i := Length(gameIds);
+      fCtx.log.Info(Format('  checked %d/%d game(s), %d owned',
+        [i, Length(gameIds), Length(Result)]));
     end;
   finally
     seen.Free;

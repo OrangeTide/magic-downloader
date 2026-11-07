@@ -125,7 +125,16 @@ it is a bundle link
 and only items you own from that bundle are listed. A scoped
 .B index
 does not sweep, so it will not mark the rest of your library removed. A backend
-that does not support scoping reports so.
+that does not support scoping reports so. A resolved scope is cached under
+.I <data dir>/cache
+for a day and reused;
+.B \-\-refresh
+ignores the cache and re\-fetches.
+.TP
+.B \-\-refresh
+Ignore any cached
+.B \-\-scope
+result and resolve it again from the network.
 .TP
 .BI "\-\-app\-key " key
 Application or API key (DriveThruRPG, itch.io). Exposes the key in the process
