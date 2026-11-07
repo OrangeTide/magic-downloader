@@ -119,6 +119,8 @@ begin
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
+  Writeln('  reorganize <dir>           Fold loose files into <user>.itch.io/<slug>');
+  Writeln('                             folders (itchio; single-owner hosts)');
   Writeln('  import <dir>               Mark items already in an Artist/Album library');
   Writeln('  manifest                   Write a library manifest (Markdown or --html)');
   Writeln('                             with download checkboxes (filters apply)');
@@ -1883,6 +1885,181 @@ end;
   SanitizeName(title)); a path backend such as itch.io matches its own download
   layout, "<user>.itch.io/<slug>", as a direct folder lookup. --dry-run reports
   without marking. The collection must be indexed first. }
+{** Folds loose files in a path-based archive into the per-item subfolders the
+  backend expects. For each host that owns exactly one indexed item, the files
+  sitting directly under <host>/ are moved into <host>/<slug>/, so a later
+  import can adopt them. Hosts that own several items are left untouched: a
+  loose file there cannot be assigned to one item without hashing it against
+  the store. Non-file entries (slug subfolders, NAS metadata) are left in place.
+  --dry-run reports the moves without making them. }
+procedure CmdReorganize;
+var
+  backendClass: TMagicBackendClass;
+  backend: TMagicBackend;
+  ctx: TMagicContext;
+  backendName, dir, rel, host, hostDir, targetDir, srcFile, dstFile: string;
+  args: TStringArray;
+  index: TMagicIndex;
+  items: TIndexedItemArray;
+  citem: TCollectionItem;
+  hosts, loose: TStringList;
+  f: TItemFilter;
+  rec: TSearchRec;
+  i, idx, p, k, movedHere: LongInt;
+  foldered, filesMoved, multiHosts, skippedFiles: LongInt;
+  dryRun: boolean;
+
+  procedure FillItem(n: LongInt);
+  begin
+    citem := Default(TCollectionItem);
+    citem.id := items[n].backendId;
+    citem.title := items[n].title;
+    citem.artist := items[n].creator;
+    citem.pageUrl := items[n].pageUrl;
+  end;
+
+  function CountLooseFiles(const d: string): LongInt;
+  var
+    r: TSearchRec;
+  begin
+    Result := 0;
+    if FindFirst(IncludeTrailingPathDelimiter(d) + '*', faAnyFile, r) = 0 then
+    try
+      repeat
+        if (r.Attr and faDirectory) = 0 then
+          Inc(Result);
+      until FindNext(r) <> 0;
+    finally
+      FindClose(r);
+    end;
+  end;
+
+begin
+  backendName := ArgValue('--backend', '');
+  backendClass := FindBackend(backendName);
+  if backendClass = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backendName]);
+  args := Positionals(['--backend', '--db']);
+  if Length(args) <> 1 then
+    raise EMagicError.Create('Usage: reorganize --backend X <library-dir>');
+  dir := args[0];
+  if not DirectoryExists(dir) then
+    raise EMagicError.CreateFmt('Directory "%s" not found.', [dir]);
+  dryRun := HasFlag('--dry-run');
+
+  index := TMagicIndex.Create(ResolveDbPath);
+  hosts := TStringList.Create;
+  loose := TStringList.Create;
+  ctx := Default(TMagicContext);
+  ctx.log := gLog;
+  ctx.index := index;
+  backend := backendClass.Create(ctx);
+  try
+    if not backend.ImportsByPath then
+      raise EMagicError.CreateFmt('Backend "%s" organizes by name, not by a '
+        + 'per-item folder; reorganize supports path-based backends (itchio).',
+        [backendName]);
+
+    { Group indexed items by host, the first segment of ItemSubdir. Objects[]
+      holds the sole item's index + 1, or 0 once a second item shares the host. }
+    hosts.Sorted := true;
+    hosts.Duplicates := dupIgnore;
+    FillChar(f, SizeOf(f), 0);
+    f.backend := backendName;
+    items := index.ListItems(f);
+    for i := 0 to High(items) do begin
+      FillItem(i);
+      rel := SanitizeSubdir(backend.ItemSubdir(citem));
+      p := Pos('/', rel);
+      if p <= 1 then
+        continue;  { needs a <host>/<slug> shape }
+      host := Copy(rel, 1, p - 1);
+      idx := hosts.IndexOf(host);
+      if idx < 0 then
+        hosts.AddObject(host, TObject(PtrInt(i + 1)))
+      else
+        hosts.Objects[idx] := TObject(PtrInt(0));  { host owns several items }
+    end;
+
+    foldered := 0;
+    filesMoved := 0;
+    multiHosts := 0;
+    skippedFiles := 0;
+    for idx := 0 to hosts.Count - 1 do begin
+      i := PtrInt(hosts.Objects[idx]) - 1;
+      host := hosts[idx];
+      hostDir := IncludeTrailingPathDelimiter(dir) + host;
+      if i < 0 then begin
+        { Several owned items: Tier B (hash matching), not handled here. Count
+          it only when loose files actually sit under the host on disk. }
+        if DirectoryExists(hostDir) and (CountLooseFiles(hostDir) > 0) then
+          Inc(multiHosts);
+        continue;
+      end;
+      if not DirectoryExists(hostDir) then
+        continue;
+      FillItem(i);
+      rel := SanitizeSubdir(backend.ItemSubdir(citem));
+      targetDir := IncludeTrailingPathDelimiter(dir) + rel;
+
+      { Collect the loose files first, then move, so renaming does not disturb
+        the directory scan. }
+      loose.Clear;
+      if FindFirst(IncludeTrailingPathDelimiter(hostDir) + '*', faAnyFile,
+        rec) = 0 then
+      try
+        repeat
+          if (rec.Attr and faDirectory) = 0 then
+            loose.Add(rec.Name);
+        until FindNext(rec) <> 0;
+      finally
+        FindClose(rec);
+      end;
+
+      movedHere := 0;
+      for k := 0 to loose.Count - 1 do begin
+        srcFile := IncludeTrailingPathDelimiter(hostDir) + loose[k];
+        dstFile := IncludeTrailingPathDelimiter(targetDir) + loose[k];
+        if FileExists(dstFile) then begin
+          gLog.Info(Format('  skip (exists): %s', [dstFile]));
+          Inc(skippedFiles);
+          continue;
+        end;
+        if dryRun then
+          gLog.Info(Format('  move: %s -> %s', [srcFile, dstFile]))
+        else begin
+          if not DirectoryExists(targetDir) then
+            if not ForceDirectories(targetDir) then
+              raise EMagicError.CreateFmt('Cannot create folder: %s',
+                [targetDir]);
+          if not RenameFile(srcFile, dstFile) then
+            raise EMagicError.CreateFmt('Cannot move %s', [srcFile]);
+        end;
+        Inc(filesMoved);
+        Inc(movedHere);
+      end;
+      if movedHere > 0 then
+        Inc(foldered);
+    end;
+
+    if dryRun then
+      gLog.Info(Format('Would fold %d file(s) into %d host(s); %d host(s) with '
+        + 'several owned items skipped.', [filesMoved, foldered, multiHosts]))
+    else
+      gLog.Info(Format('Folded %d file(s) into %d host(s); %d host(s) with '
+        + 'several owned items skipped.', [filesMoved, foldered, multiHosts]));
+    if skippedFiles > 0 then
+      gLog.Info(Format('%d file(s) left in place (a file of that name already '
+        + 'existed in the target).', [skippedFiles]));
+  finally
+    backend.Free;
+    loose.Free;
+    hosts.Free;
+    index.Free;
+  end;
+end;
+
 procedure CmdImport;
 var
   backendClass: TMagicBackendClass;
@@ -2321,6 +2498,7 @@ begin
         'list': CmdList;
         'details': CmdDetails;
         'relocate': CmdRelocate;
+        'reorganize': CmdReorganize;
         'import': CmdImport;
         'manifest': CmdManifest;
         'blacklist': CmdBlacklist;

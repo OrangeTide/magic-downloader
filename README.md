@@ -326,6 +326,7 @@ magicdl check --backend itchio          # which local copies are the store's lat
 magicdl blacklist <id> --reason "dup"   # sync will skip these items
 magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
+magicdl reorganize <dir> --backend itchio  # fold loose files into slug folders
 magicdl import <dir> --backend itchio   # adopt a hand-built archive
 ```
 
@@ -344,6 +345,22 @@ magicdl import --backend itchio ~/itch-archive --dry-run
 
 Bandcamp instead matches an `Artist/YYYY - Album` music library by name.
 
+If an old archive keeps a creator's files loose under `<user>.itch.io/` with no
+per-item folder, `import` cannot adopt them. `reorganize` prepares such an
+archive: for each host that owns exactly one indexed item, it moves the loose
+files into that item's `<user>.itch.io/<slug>` folder, so `import` adopts them
+on the next run. A host that owns several items is left alone, since a loose
+file there cannot be assigned to one item by path. Review the moves with
+`--dry-run` first:
+
+```
+magicdl reorganize --backend itchio ~/itch-archive --dry-run
+magicdl reorganize --backend itchio ~/itch-archive
+```
+
+Files are moved, never copied or deleted, and a file is left in place if one of
+the same name already sits in the target folder.
+
 `verify` checks files against what magicdl recorded when it downloaded them.
 `check` is different: it asks the store for each item's current version and
 compares your local files to it by hash, so it catches items that have been
@@ -361,10 +378,12 @@ magicdl check --backend itchio 12345:67890     # one item
 magicdl check --backend itchio --limit 50       # the first 50 indexed items
 ```
 
-`check` resolves and hashes each item, so it makes a request per item and reads
-each local file. Scope it with item ids or the list filters (`--limit`,
-`--status`, and so on). itch.io reports an MD5 per file, which is what the
-comparison uses.
+`check` reads each local file and, for the items you actually hold, makes one
+request to resolve the store's current version. An item with nothing on disk is
+reported as not-downloaded without contacting the store, so a check over a large
+library only makes requests for the items held locally. Scope it further with
+item ids or the list filters (`--limit`, `--status`, and so on). itch.io reports
+an MD5 per file, which is what the comparison uses.
 
 ## How it stores things
 

@@ -84,6 +84,22 @@ Remove items from the blacklist.
 Record that an item moved from one id to another. The old item is skipped by
 .BR sync .
 .TP
+.BI "reorganize " dir
+Fold loose files in a path\-based archive into the per\-item subfolders the
+backend expects, so
+.B import
+can then adopt them. For each
+.IR <user> .itch.io/
+host that owns exactly one indexed item, the files sitting directly under the
+host are moved into
+.IR <user> .itch.io/ <slug> .
+A host that owns several items is left alone, since a loose file there cannot be
+assigned to one item without hashing it against the store. Slug subfolders and
+other directories are left in place. Only itch.io, which imports by path,
+supports this. Use
+.B \-\-dry\-run
+to review the moves first.
+.TP
 .BI "import " dir
 Adopt a hand\-built archive: mark indexed items whose files already sit under
 .IR dir ,
