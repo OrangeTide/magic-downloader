@@ -171,6 +171,7 @@ begin
     [DEFAULT_REQUEST_INTERVAL_MS]));
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
+  Writeln('  --user-agent <s>           HTTP User-Agent (default magicdl/<version>)');
   Writeln('  --skip-hidden              Skip hidden collection items');
   Writeln('  --dry-run                  Do not write files');
   Writeln('  --verbose                  Debug logging');
@@ -371,7 +372,10 @@ begin
     StrToIntDef(ArgValue('--retries', ''),
       StrToIntDef(gConfig.Get('', 'retries', ''), 5)),
     StrToIntDef(ArgValue('--timeout-ms', ''),
-      StrToIntDef(gConfig.Get('', 'timeout-ms', ''), 30000)));
+      StrToIntDef(gConfig.Get('', 'timeout-ms', ''), 30000)),
+    { CLI wins, then the config user-agent, then an honest default. }
+    ArgValue('--user-agent',
+      gConfig.Get('', 'user-agent', 'magicdl/' + APP_VERSION)));
   Result.index := TMagicIndex.Create(ResolveDbPath);
 end;
 
@@ -941,7 +945,7 @@ begin
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
-    '--timeout-ms', '--status', '--limit', '--scope']);
+    '--timeout-ms', '--status', '--limit', '--scope', '--user-agent']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
@@ -1180,7 +1184,7 @@ begin
   backendClass := RequireBackend(backendName);
   only := Positionals(['--backend', '--db', '--status', '--limit', '--format',
     '--user', '--app-key', '--app-key-file', '--cookies', '--interval-ms',
-    '--retries', '--timeout-ms', '--scope']);
+    '--retries', '--timeout-ms', '--scope', '--user-agent']);
   nCur := 0; nOut := 0; nInc := 0; nNo := 0; nUnavail := 0;
   s := OpenSession;
   try
@@ -2078,7 +2082,7 @@ begin
       [backendName]);
   args := Positionals(['--backend', '--db', '--max-owned', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
-    '--timeout-ms']);
+    '--timeout-ms', '--user-agent']);
   if Length(args) <> 1 then
     raise EMagicError.Create('Usage: reorganize --backend X <library-dir>');
   dir := args[0];

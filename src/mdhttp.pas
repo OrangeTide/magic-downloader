@@ -24,6 +24,7 @@ type
     fRetries: LongInt;
     fTimeoutMs: LongInt;
     fAuthHeader: string;   { sent as Authorization when non-empty }
+    fUserAgent: string;    { sent as User-Agent when non-empty }
     {** Runs one request, writing the response body to respStream and returning
       the HTTP status code. Reports the server's suggested filename (from
       Content-Disposition) in contentDisposition. Raises only for transport
@@ -39,7 +40,7 @@ type
       pacing: TPacing): string;
   public
     constructor Create(aLog: TMagicLogger; aPacer: TPacer; aCookies: TCookieJar;
-      aRetries: LongInt; aTimeoutMs: LongInt);
+      aRetries: LongInt; aTimeoutMs: LongInt; const aUserAgent: string = '');
     {** Sets an Authorization header value sent on every request (empty clears
       it). Used by token-authenticated backends. }
     procedure SetAuthHeader(const value: string);
@@ -121,7 +122,8 @@ end;
 { ---- TMagicHttp ---- }
 
 constructor TMagicHttp.Create(aLog: TMagicLogger; aPacer: TPacer;
-  aCookies: TCookieJar; aRetries: LongInt; aTimeoutMs: LongInt);
+  aCookies: TCookieJar; aRetries: LongInt; aTimeoutMs: LongInt;
+  const aUserAgent: string);
 begin
   inherited Create;
   fLog := aLog;
@@ -129,6 +131,7 @@ begin
   fCookies := aCookies;
   fRetries := aRetries;
   fTimeoutMs := aTimeoutMs;
+  fUserAgent := aUserAgent;
 end;
 
 {** Extracts the filename from a Content-Disposition header value, or '' when it
@@ -178,6 +181,8 @@ begin
     client.AllowRedirect := true;
     client.ConnectTimeout := fTimeoutMs;
     client.IOTimeout := fTimeoutMs;
+    if fUserAgent <> '' then
+      client.AddHeader('User-Agent', fUserAgent);
     if (fCookies <> nil) and (fCookies.Count > 0) then
       client.AddHeader('Cookie', fCookies.HeaderValue);
     if sendAuth and (fAuthHeader <> '') then

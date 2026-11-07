@@ -319,6 +319,13 @@ Retries per request. Default 5.
 .BI "\-\-timeout\-ms " n
 Per\-request timeout. Default 30000.
 .TP
+.BI "\-\-user\-agent " s
+The HTTP User\-Agent header sent with every request. Defaults to
+.RI magicdl/ version ,
+or the config
+.B user\-agent
+key. Set it when a store expects a particular client string.
+.TP
 .BI "\-\-reason " text
 Note why an item is blacklisted.
 .TP
