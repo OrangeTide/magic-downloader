@@ -45,6 +45,7 @@ type
     class function BackendName: string; override;
     procedure Authenticate; override;
     function AccountLabel: string; override;
+    function ItemSubdir(const item: TCollectionItem): string; override;
     function ListCollection: TCollectionItemArray; override;
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
@@ -119,6 +120,37 @@ begin
     AccountLabel := fAccount
   else
     AccountLabel := fCtx.user;
+end;
+
+{** "<user>.itch.io/<slug>" taken from the item's page URL, so downloads land in
+  the same layout as the store (and the user's existing archive). Returns '' when
+  there is no usable page URL, so the caller falls back to its default name. }
+function TItchIoBackend.ItemSubdir(const item: TCollectionItem): string;
+var
+  u: string;
+  p: LongInt;
+begin
+  Result := '';
+  u := Trim(item.pageUrl);
+  if u = '' then
+    exit;
+  { Drop the scheme. }
+  p := Pos('://', u);
+  if p > 0 then
+    u := Copy(u, p + 3, MaxInt);
+  { Drop any query or fragment, then a trailing slash. }
+  p := Pos('?', u);
+  if p > 0 then
+    u := Copy(u, 1, p - 1);
+  p := Pos('#', u);
+  if p > 0 then
+    u := Copy(u, 1, p - 1);
+  while (u <> '') and (u[Length(u)] = '/') do
+    SetLength(u, Length(u) - 1);
+  { Need both a host and a slug (host/slug); otherwise fall back. }
+  if Pos('/', u) = 0 then
+    exit;
+  Result := u;  { e.g. finji.itch.io/overland; caller sanitizes each level }
 end;
 
 {** Builds a collection item from one owned_key object. }

@@ -60,6 +60,13 @@ type
       profile, overrides this. May be empty when there is nothing to show. }
     function AccountLabel: string; virtual;
 
+    {** The output subdirectory for an item, relative to the output directory,
+      with '/' separating levels (the caller sanitizes each level and joins them
+      with the native separator). An empty result means "use the caller's
+      default name". itch.io overrides this to "<user>.itch.io/<slug>", taken
+      from the page URL, so downloads match the store's own layout. }
+    function ItemSubdir(const item: TCollectionItem): string; virtual;
+
     {** Returns every item in the user's collection. Does not download anything. }
     function ListCollection: TCollectionItemArray; virtual; abstract;
 
@@ -117,6 +124,11 @@ end;
 function TMagicBackend.AccountLabel: string;
 begin
   AccountLabel := fCtx.user;
+end;
+
+function TMagicBackend.ItemSubdir(const item: TCollectionItem): string;
+begin
+  ItemSubdir := '';  { caller uses its default name }
 end;
 
 function TMagicBackend.SupportsScope: boolean;

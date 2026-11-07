@@ -243,8 +243,8 @@ magicdl index --backend itchio --scope https://itch.io/b/520/some-bundle
 
 For itch.io, the scope is a bundle link (`https://itch.io/b/<id>/<slug>`, or just
 the numeric id). magicdl reads the bundle's game list and syncs only the items
-you own from it, in the usual `Creator - Title` layout. A scoped `index` adds the
-bundle's items to the index without marking the rest of your library removed.
+you own from it. A scoped `index` adds the bundle's items to the index without
+marking the rest of your library removed.
 `--scope` is a general mechanism, so other backends can later accept their own
 references (a collection, a series, a favorites list); each backend documents
 what it takes, and a backend that does not support it says so.
@@ -254,10 +254,13 @@ its games, then your ownership is checked in batches), with a progress line as
 it goes. The result is cached under `<data dir>/cache` for a day and reused on
 the next run; pass `--refresh` to ignore the cache and re-fetch.
 
-Files land under the output directory in a `Creator - Title` folder per item.
-Set it with `--out <dir>` or the config `out` key; there is no default, so a
-sync or verify without one is an error. Add `--covers` to also fetch cover
-images (Bandcamp).
+Files land under the output directory in one folder per item. Most backends use
+a `Creator - Title` folder. itch.io instead mirrors the store's own layout,
+`<user>.itch.io/<slug>` (for example `finji.itch.io/overland`), taken from the
+item's page URL, so a synced library matches a hand-downloaded `*.itch.io`
+archive. Set the output directory with `--out <dir>` or the config `out` key;
+there is no default, so a sync or verify without one is an error. Add `--covers`
+to also fetch cover images (Bandcamp).
 
 `--format` selects the content type, as a comma-separated list. For Bandcamp,
 which serves one archive, the first entry is the audio format to request (`flac`,

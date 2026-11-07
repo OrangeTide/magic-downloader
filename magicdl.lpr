@@ -726,6 +726,42 @@ begin
     ItemDisplayName := item.id;
 end;
 
+{** Sanitizes a '/'-separated relative subdirectory one level at a time, so each
+  level is a safe file name and the slashes become real path separators. Empty
+  levels (from a leading, trailing, or doubled slash) are dropped. }
+function SanitizeSubdir(const sub: string): string;
+var
+  parts: TStringArray;
+  i: LongInt;
+begin
+  Result := '';
+  parts := sub.Split(['/']);
+  for i := 0 to High(parts) do begin
+    if parts[i] = '' then
+      continue;
+    if Result <> '' then
+      Result := Result + PathDelim;
+    Result := Result + SanitizeName(parts[i]);
+  end;
+end;
+
+{** The output directory for an item: the backend's own layout when it has one
+  (itch.io's "<user>.itch.io/<slug>", split into levels), otherwise the default
+  single "Creator - Title" folder. The default is sanitized as one name, so a
+  creator or title containing a slash stays one folder as before. }
+function ItemOutputDir(backend: TMagicBackend; const ctx: TMagicContext;
+  const item: TCollectionItem): string;
+var
+  sub, rel: string;
+begin
+  sub := backend.ItemSubdir(item);
+  if sub <> '' then
+    rel := SanitizeSubdir(sub)
+  else
+    rel := SanitizeName(ItemDisplayName(item));
+  ItemOutputDir := IncludeTrailingPathDelimiter(ctx.outputDir) + rel;
+end;
+
 {** Downloads an item's files (a Bandcamp archive, or each of a DriveThruRPG
   product's files) into one folder, plus its cover when --covers is set. Records
   the version and each file in the index. Honors --dry-run. Returns true when
@@ -794,8 +830,7 @@ begin
   ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
     targets[0].releasedAt, seen);
 
-  itemDir := IncludeTrailingPathDelimiter(ctx.outputDir) +
-    SanitizeName(ItemDisplayName(named));
+  itemDir := ItemOutputDir(backend, ctx, named);
 
   fetchedAny := false;
   for i := 0 to High(targets) do begin

@@ -263,7 +263,11 @@ RPG PDFs and files. Authenticates with an application key from the account's
 .TP
 .B itchio
 Games, tools, and assets. Authenticates with an API key from
-itch.io/user/settings/api\-keys.
+itch.io/user/settings/api\-keys. Downloads mirror the store layout,
+.IR <user> .itch.io/ <slug> ,
+taken from each item's page URL, rather than the default
+.IR Creator " - " Title
+folder.
 .SH AUTHENTICATION
 Bandcamp uses your logged\-in browser session cookies. DriveThruRPG and itch.io
 use an application or API key.
