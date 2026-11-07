@@ -46,6 +46,7 @@ type
     procedure Authenticate; override;
     function AccountLabel: string; override;
     function ItemSubdir(const item: TCollectionItem): string; override;
+    function ImportsByPath: boolean; override;
     function ListCollection: TCollectionItemArray; override;
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
@@ -151,6 +152,11 @@ begin
   if Pos('/', u) = 0 then
     exit;
   Result := u;  { e.g. finji.itch.io/overland; caller sanitizes each level }
+end;
+
+function TItchIoBackend.ImportsByPath: boolean;
+begin
+  ImportsByPath := true;  { match an archive by <user>.itch.io/<slug> folders }
 end;
 
 {** Builds a collection item from one owned_key object. }

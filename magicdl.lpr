@@ -1651,25 +1651,32 @@ begin
     StripYearPrefix := Copy(s, 8, Length(s));
 end;
 
-{** Marks indexed items that already exist under an external directory (an
-  Artist/Album music library) so sync skips them. Matching is by identity: the
-  artist folder equals SanitizeName(creator) and the album folder, minus its
-  "YYYY - " prefix, equals SanitizeName(title). --dry-run reports without
-  marking. }
+{** Marks indexed items whose files already sit in an external directory, so
+  sync skips them (adopting a hand-built archive). Two matching styles: most
+  backends match a music library by identity (the Artist folder equals
+  SanitizeName(creator), and the album folder, minus a "YYYY - " prefix, equals
+  SanitizeName(title)); a path backend such as itch.io matches its own download
+  layout, "<user>.itch.io/<slug>", as a direct folder lookup. --dry-run reports
+  without marking. The collection must be indexed first. }
 procedure CmdImport;
 var
-  backendName, dir, artistPath, albumTitle, key: string;
+  backendClass: TMagicBackendClass;
+  backend: TMagicBackend;
+  ctx: TMagicContext;
+  backendName, dir, artistPath, albumTitle, key, rel, full: string;
   args: TStringArray;
   index: TMagicIndex;
   items: TIndexedItemArray;
   keys: TStringList;
   f: TItemFilter;
+  citem: TCollectionItem;
   artistRec, albumRec: TSearchRec;
   i, idx, matched, unmatched: LongInt;
   dryRun: boolean;
 begin
   backendName := ArgValue('--backend', '');
-  if FindBackend(backendName) = nil then
+  backendClass := FindBackend(backendName);
+  if backendClass = nil then
     raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
       [backendName]);
   args := Positionals(['--backend', '--db']);
@@ -1682,74 +1689,109 @@ begin
 
   index := TMagicIndex.Create(ResolveDbPath);
   keys := TStringList.Create;
+  ctx := Default(TMagicContext);
+  ctx.log := gLog;
+  ctx.index := index;
+  backend := backendClass.Create(ctx);
   try
-    { Index items keyed by sanitized "creator/title". }
     FillChar(f, SizeOf(f), 0);
     f.backend := backendName;
     items := index.ListItems(f);
-    keys.Sorted := true;
-    keys.Duplicates := dupIgnore;
-    for i := 0 to High(items) do
-      keys.AddObject(
-        SanitizeName(items[i].creator) + '/' + SanitizeName(items[i].title),
-        TObject(PtrInt(i)));
-
     matched := 0;
     unmatched := 0;
-    { Walk artist folders, then album folders. }
-    if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faDirectory,
-      artistRec) = 0 then
-    try
-      repeat
-        if (artistRec.Name = '.') or (artistRec.Name = '..')
-          or ((artistRec.Attr and faDirectory) = 0) then
+
+    if backend.ImportsByPath then begin
+      { Direct lookup: each item's own download path under the library. }
+      for i := 0 to High(items) do begin
+        citem := Default(TCollectionItem);
+        citem.id := items[i].backendId;
+        citem.title := items[i].title;
+        citem.artist := items[i].creator;
+        citem.pageUrl := items[i].pageUrl;
+        rel := SanitizeSubdir(backend.ItemSubdir(citem));
+        if rel = '' then begin
+          Inc(unmatched);
           continue;
-        artistPath := IncludeTrailingPathDelimiter(dir) + artistRec.Name;
-        if FindFirst(IncludeTrailingPathDelimiter(artistPath) + '*',
-          faDirectory, albumRec) = 0 then
-        try
-          repeat
-            if (albumRec.Name = '.') or (albumRec.Name = '..')
-              or ((albumRec.Attr and faDirectory) = 0) then
-              continue;
-            albumTitle := StripYearPrefix(albumRec.Name);
-            key := artistRec.Name + '/' + albumTitle;
-            idx := keys.IndexOf(key);
-            if idx < 0 then  { try the folder name unstripped }
-              idx := keys.IndexOf(artistRec.Name + '/' + albumRec.Name);
-            if idx >= 0 then begin
-              i := PtrInt(keys.Objects[idx]);
-              Inc(matched);
-              if dryRun then
-                gLog.Info(Format('  match: %s - %s  [%s]',
-                  [items[i].creator, items[i].title, items[i].backendId]))
-              else
-                index.SetImported(backendName, items[i].backendId,
-                  IncludeTrailingPathDelimiter(artistPath) + albumRec.Name);
-            end
-            else begin
-              Inc(unmatched);
-              gLog.Debug(Format('  no match: %s/%s',
-                [artistRec.Name, albumRec.Name]));
-            end;
-          until FindNext(albumRec) <> 0;
-        finally
-          FindClose(albumRec);
         end;
-      until FindNext(artistRec) <> 0;
-    finally
-      FindClose(artistRec);
+        full := IncludeTrailingPathDelimiter(dir) + rel;
+        if DirectoryExists(full) then begin
+          Inc(matched);
+          if dryRun then
+            gLog.Info(Format('  match: %s  [%s] -> %s',
+              [ItemDisplayName(citem), items[i].backendId, full]))
+          else
+            index.SetImported(backendName, items[i].backendId, full);
+        end
+        else begin
+          Inc(unmatched);
+          gLog.Debug(Format('  no local folder: %s', [rel]));
+        end;
+      end;
+    end
+    else begin
+      { Name walk: Artist folders, then album folders, keyed by creator/title. }
+      keys.Sorted := true;
+      keys.Duplicates := dupIgnore;
+      for i := 0 to High(items) do
+        keys.AddObject(
+          SanitizeName(items[i].creator) + '/' + SanitizeName(items[i].title),
+          TObject(PtrInt(i)));
+
+      if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faDirectory,
+        artistRec) = 0 then
+      try
+        repeat
+          if (artistRec.Name = '.') or (artistRec.Name = '..')
+            or ((artistRec.Attr and faDirectory) = 0) then
+            continue;
+          artistPath := IncludeTrailingPathDelimiter(dir) + artistRec.Name;
+          if FindFirst(IncludeTrailingPathDelimiter(artistPath) + '*',
+            faDirectory, albumRec) = 0 then
+          try
+            repeat
+              if (albumRec.Name = '.') or (albumRec.Name = '..')
+                or ((albumRec.Attr and faDirectory) = 0) then
+                continue;
+              albumTitle := StripYearPrefix(albumRec.Name);
+              key := artistRec.Name + '/' + albumTitle;
+              idx := keys.IndexOf(key);
+              if idx < 0 then  { try the folder name unstripped }
+                idx := keys.IndexOf(artistRec.Name + '/' + albumRec.Name);
+              if idx >= 0 then begin
+                i := PtrInt(keys.Objects[idx]);
+                Inc(matched);
+                if dryRun then
+                  gLog.Info(Format('  match: %s - %s  [%s]',
+                    [items[i].creator, items[i].title, items[i].backendId]))
+                else
+                  index.SetImported(backendName, items[i].backendId,
+                    IncludeTrailingPathDelimiter(artistPath) + albumRec.Name);
+              end
+              else begin
+                Inc(unmatched);
+                gLog.Debug(Format('  no match: %s/%s',
+                  [artistRec.Name, albumRec.Name]));
+              end;
+            until FindNext(albumRec) <> 0;
+          finally
+            FindClose(albumRec);
+          end;
+        until FindNext(artistRec) <> 0;
+      finally
+        FindClose(artistRec);
+      end;
     end;
 
     if not dryRun then
       index.Commit;
     if dryRun then
-      gLog.Info(Format('Would import %d item(s); %d folder(s) had no match.',
+      gLog.Info(Format('Would import %d item(s); %d with no match.',
         [matched, unmatched]))
     else
-      gLog.Info(Format('Imported %d item(s); %d folder(s) had no match.',
+      gLog.Info(Format('Imported %d item(s); %d with no match.',
         [matched, unmatched]));
   finally
+    backend.Free;
     keys.Free;
     index.Free;
   end;

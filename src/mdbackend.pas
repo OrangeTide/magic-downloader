@@ -67,6 +67,12 @@ type
       from the page URL, so downloads match the store's own layout. }
     function ItemSubdir(const item: TCollectionItem): string; virtual;
 
+    {** True when `import` should recognise an existing local library by each
+      item's download path (ItemSubdir), a direct folder lookup, rather than by
+      the default Artist/Album name walk. itch.io sets this: its
+      "<user>.itch.io/<slug>" folders map one to one onto items. }
+    function ImportsByPath: boolean; virtual;
+
     {** Returns every item in the user's collection. Does not download anything. }
     function ListCollection: TCollectionItemArray; virtual; abstract;
 
@@ -129,6 +135,11 @@ end;
 function TMagicBackend.ItemSubdir(const item: TCollectionItem): string;
 begin
   ItemSubdir := '';  { caller uses its default name }
+end;
+
+function TMagicBackend.ImportsByPath: boolean;
+begin
+  ImportsByPath := false;
 end;
 
 function TMagicBackend.SupportsScope: boolean;

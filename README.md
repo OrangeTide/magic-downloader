@@ -309,12 +309,23 @@ magicdl verify --rescan --out <dir>     # relocate files you moved, matched by h
 magicdl blacklist <id> --reason "dup"   # sync will skip these items
 magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
-magicdl import <dir> --backend bandcamp # mark items already in a local library
+magicdl import <dir> --backend itchio   # adopt a hand-built archive
 ```
 
-`import` scans a local `Artist/YYYY - Album` library and marks indexed items it
-already holds, so `sync` skips them. Matching is by name; add `--dry-run` to
-review the matches first.
+`import` marks indexed items whose files already sit in a local directory, so
+`sync` skips them. Index the collection first, then point `import` at the
+archive. Add `--dry-run` to review the matches before marking.
+
+How it matches depends on the backend. itch.io recognises its own download
+layout, so an archive of `<user>.itch.io/<slug>` folders is adopted by a direct
+path lookup:
+
+```
+magicdl index  --backend itchio
+magicdl import --backend itchio ~/itch-archive --dry-run
+```
+
+Bandcamp instead matches an `Artist/YYYY - Album` music library by name.
 
 ## How it stores things
 

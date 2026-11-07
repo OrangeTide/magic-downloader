@@ -69,11 +69,15 @@ Record that an item moved from one id to another. The old item is skipped by
 .BR sync .
 .TP
 .BI "import " dir
-Mark indexed items that already exist under an
-.IR Artist / "YYYY \- Album"
-music library so
+Adopt a hand\-built archive: mark indexed items whose files already sit under
+.IR dir ,
+so
 .B sync
-skips them. Matching is by name. Use
+skips them. Index the collection first. itch.io matches its own
+.IR <user> .itch.io/ <slug>
+download layout by a direct path lookup; other backends match an
+.IR Artist / "YYYY \- Album"
+music library by name. Use
 .B \-\-dry\-run
 to review matches before marking.
 .TP
