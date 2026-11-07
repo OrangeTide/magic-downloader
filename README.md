@@ -311,8 +311,7 @@ magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
 
 ## How it stores things
 
-The index is a SQLite database (`--db`, or the config `db` key; default
-`~/.local/share/magicdl/magicdl.sqlite`) with three levels:
+The index is a SQLite database with three levels:
 
  * **items**: one row per purchase, kept forever. Carries status (active,
    removed, preorder, unavailable), hidden and blacklist flags, and presence
@@ -323,8 +322,41 @@ The index is a SQLite database (`--db`, or the config `db` key; default
    (present or missing). This is how moved files are found again and integrity is
    checked.
 
-The index is a rebuildable cache. Re-running `index` or `sync` repopulates it, so
-an out-of-date schema is dropped and recreated rather than migrated.
+### Where the index lives
+
+By default the database is:
+
+```
+~/.local/share/magicdl/magicdl.sqlite
+```
+
+When `$XDG_DATA_HOME` is set, it is `$XDG_DATA_HOME/magicdl/magicdl.sqlite`
+instead. The path is resolved in this order, first one wins: the `--db <path>`
+option, then the `[general] db` key in the config file, then the default above.
+The parent directory is created on first use. `--scope` results are cached
+separately under `~/.local/share/magicdl/cache/` (see Sync).
+
+To find the exact path your setup uses, check `--db` and your config, or run a
+command with `--verbose`.
+
+### Removing a corrupted index
+
+The index is a rebuildable cache: it holds no secrets and nothing you cannot
+fetch again, so it is safe to delete. Re-running `index` or `sync` recreates it,
+and an out-of-date schema is dropped and recreated rather than migrated.
+
+If the database will not open (for example "database disk image is malformed"),
+delete it and let magicdl rebuild it. Remove the `.sqlite` file and any SQLite
+sidecar files next to it (a `-journal`, `-wal`, or `-shm` file that a crash can
+leave behind):
+
+```
+rm ~/.local/share/magicdl/magicdl.sqlite*
+```
+
+Use the matching path if yours is elsewhere (`--db`, the config `db` key, or
+`$XDG_DATA_HOME`). Then run `index` again to repopulate it. Your downloaded
+files are not touched; a later `verify` re-checks them and marks what is present.
 
 ## Rate limiting
 

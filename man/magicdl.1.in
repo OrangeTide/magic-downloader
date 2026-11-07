@@ -315,7 +315,21 @@ when set; override with
 .B \-\-db
 or the config
 .B db
-key).
+key). The index is a rebuildable cache and holds no secrets. If it is corrupted
+and will not open, delete it together with any
+.BR \-journal ", " \-wal ", or " \-shm
+sidecar file next to it
+.RB ( "rm magicdl.sqlite*" )
+and run
+.B index
+again to rebuild it; downloaded files are untouched.
+.TP
+.B ~/.local/share/magicdl/cache/
+Cached
+.B \-\-scope
+resolutions, reused for a day. Safe to delete;
+.B \-\-refresh
+also rewrites them.
 .SH EXAMPLES
 .PP
 Index a DriveThruRPG library:
