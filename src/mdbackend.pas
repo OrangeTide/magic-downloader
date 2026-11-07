@@ -54,6 +54,12 @@ type
       Raises EMagicError on failure. }
     procedure Authenticate; virtual; abstract;
 
+    {** A display name for the authenticated account, for log messages. The
+      default is the context user (the --user value). A backend that learns the
+      account name only after Authenticate, such as itch.io reading it from the
+      profile, overrides this. May be empty when there is nothing to show. }
+    function AccountLabel: string; virtual;
+
     {** Returns every item in the user's collection. Does not download anything. }
     function ListCollection: TCollectionItemArray; virtual; abstract;
 
@@ -106,6 +112,11 @@ end;
 class function TMagicBackend.CookieHost: string;
 begin
   CookieHost := '';
+end;
+
+function TMagicBackend.AccountLabel: string;
+begin
+  AccountLabel := fCtx.user;
 end;
 
 function TMagicBackend.SupportsScope: boolean;

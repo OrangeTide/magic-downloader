@@ -36,6 +36,7 @@ uses
 type
   TItchIoBackend = class(TMagicBackend)
   private
+    fAccount: string;  { itch.io username, read from the profile at auth time }
     {** Pages through owned-keys; extraQuery narrows the query (e.g. game_ids). }
     function FetchOwnedKeys(const extraQuery: string): TCollectionItemArray;
     {** The numeric game ids of a bundle, from its public games.json. }
@@ -43,6 +44,7 @@ type
   public
     class function BackendName: string; override;
     procedure Authenticate; override;
+    function AccountLabel: string; override;
     function ListCollection: TCollectionItemArray; override;
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
@@ -83,11 +85,14 @@ procedure TItchIoBackend.Authenticate;
 var
   respText: string;
   data: TJSONData;
+  user: TJSONObject;
 begin
   if fCtx.apiKey = '' then
     raise EMagicError.Create(
       'itch.io needs an API key. Create one at ' +
-      'https://itch.io/user/settings/api-keys and pass it with --app-key-file.');
+      'https://itch.io/user/settings/api-keys, then store it with ' +
+      '"magicdl key set --backend itchio" (add --user <name> to keep ' +
+      'several accounts).');
   fCtx.http.SetAuthHeader('Bearer ' + fCtx.apiKey);
 
   { Validate the key up front so a bad one fails clearly. }
@@ -97,9 +102,23 @@ begin
     if not (data is TJSONObject) or not (TJSONObject(data).Find('user') is TJSONObject) then
       raise EMagicError.Create(
         'itch.io authentication failed. The API key may be wrong or revoked.');
+    { Remember who the key belongs to, so the UI can show the account even
+      though itch.io takes no --user. }
+    user := TJSONObject(TJSONObject(data).Objects['user']);
+    fAccount := user.Get('username', '');
+    if fAccount = '' then
+      fAccount := user.Get('display_name', '');
   finally
     data.Free;
   end;
+end;
+
+function TItchIoBackend.AccountLabel: string;
+begin
+  if fAccount <> '' then
+    AccountLabel := fAccount
+  else
+    AccountLabel := fCtx.user;
 end;
 
 {** Builds a collection item from one owned_key object. }

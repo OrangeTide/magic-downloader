@@ -121,6 +121,20 @@ magicdl key rm  --backend itchio          # removes it
 echo 'YOUR_KEY_HERE' | magicdl key set --backend itchio
 ```
 
+To keep more than one account for a backend, name each with `--user`. The plain
+form (no `--user`) is the default account; a named account is used only when you
+pass the same `--user` to `index` or `sync`:
+
+```
+magicdl key set --backend itchio --user alice
+magicdl index   --backend itchio --user alice     # uses alice's key
+magicdl index   --backend itchio                  # uses the default account
+```
+
+For itch.io the account name need not match anything; the itch.io username shown
+in the log comes from the API key itself, so you can confirm which account a run
+is using.
+
 If no keyring is available, a key file is the fallback. Keep the key in a file
 readable only by you and pass it, so the key does not appear on the command
 line:

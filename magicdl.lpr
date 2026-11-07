@@ -120,11 +120,12 @@ begin
   Writeln('  manifest                   Write a library manifest (Markdown or --html)');
   Writeln('                             with download checkboxes (filters apply)');
   Writeln('  key set|get|rm             Store, show, or remove a backend key in the');
-  Writeln('                             system keyring (needs --backend)');
+  Writeln('                             system keyring (--backend, optional --user)');
   Writeln;
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
-  Writeln('  --user <name>              Store account/user name (bandcamp)');
+  Writeln('  --user <name>              Account name: the bandcamp fan handle, or');
+  Writeln('                             which keyring account to use (see key)');
   Writeln('  --scope <ref>              Index/sync only a subset: an itch.io bundle');
   Writeln('                             link (per-backend; see the backend docs)');
   Writeln('  --refresh                  Ignore the cached --scope result and re-fetch');
@@ -236,6 +237,17 @@ begin
       'config.ini.');
 end;
 
+{** The keyring account key for a backend and optional user. With no user it is
+  just the backend name, so a single-account setup needs no --user; with a user
+  it is "backend:user", keeping several accounts of one backend apart. }
+function KeyringAccount(const backend, user: string): string;
+begin
+  if user = '' then
+    KeyringAccount := backend
+  else
+    KeyringAccount := backend + ':' + user;
+end;
+
 function BuildContext(index: TMagicIndex; cookies: TCookieJar;
   http: TMagicHttp; const backendName: string): TMagicContext;
 var
@@ -263,7 +275,8 @@ begin
       keyFile := gConfig.Get(backendName, 'app-key-file', '');
     if keyFile <> '' then
       Result.apiKey := ReadKeyFile(ExpandPathVars(keyFile))
-    else if KeyringLookup(backendName, Result.apiKey) then
+    else if KeyringLookup(KeyringAccount(backendName, Result.user),
+      Result.apiKey) then
       { found in the keyring }
     else
       Result.apiKey := gConfig.Get(backendName, 'app-key', '');
@@ -597,6 +610,17 @@ begin
       'Backend "%s" does not support --scope.', [backendName]);
 end;
 
+{** A ' for "<account>"' clause for a banner line, or '' when the backend has no
+  account name to show. Call after Authenticate so a backend that learns its
+  account only then (itch.io, from the profile) can report it. }
+function ForAccount(backend: TMagicBackend): string;
+begin
+  if backend.AccountLabel <> '' then
+    ForAccount := Format(' for "%s"', [backend.AccountLabel])
+  else
+    ForAccount := '';
+end;
+
 procedure CmdIndex;
 var
   backendClass: TMagicBackendClass;
@@ -620,8 +644,8 @@ begin
         IndexScope(backend, s.index, backendName, scope, items);
       end
       else begin
-        gLog.Info(Format('Indexing %s collection for "%s"...',
-          [backendName, ctx.user]));
+        gLog.Info(Format('Indexing %s collection%s...',
+          [backendName, ForAccount(backend)]));
         IndexCollection(backend, s.index, backendName, items);
       end;
       gLog.Info(Format('Indexed %d items (%d total in database).',
@@ -846,11 +870,11 @@ begin
       RequireOutDir(backendName);
     backend := backendClass.Create(ctx);
     try
-      gLog.Info(Format('Syncing %s collection for "%s"...',
-        [backendName, ctx.user]));
       scope := ScopeArg(backend, backendName);
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
+      gLog.Info(Format('Syncing %s collection%s...',
+        [backendName, ForAccount(backend)]));
 
       fetched := 0;
       if Length(only) > 0 then begin
@@ -1916,44 +1940,54 @@ begin
 end;
 
 {** Stores, shows, or removes a backend's key in the system keyring. The action
-  is the first positional word (set/get/rm) and --backend names the backend. }
+  is the first positional word (set/get/rm), --backend names the backend, and
+  an optional --user keeps several accounts of one backend apart. }
 procedure CmdKey;
 var
-  action, backendName, value: string;
+  action, backendName, user, account, label_, value: string;
 begin
   action := '';
   if ParamCount >= 2 then
     action := ParamStr(2);
   if (action <> 'set') and (action <> 'get') and (action <> 'rm') then
-    raise EMagicError.Create('Usage: key set|get|rm --backend <name>');
+    raise EMagicError.Create(
+      'Usage: key set|get|rm --backend <name> [--user <account>]');
   RequireBackend(backendName);  { validates --backend }
   if not KeyringAvailable then
     raise EMagicError.Create('No system keyring is available (' +
       KeyringLastError + '). Use --app-key-file instead.');
 
+  user := ArgValue('--user', '');
+  account := KeyringAccount(backendName, user);
+  { What to call this account in messages. }
+  if user <> '' then
+    label_ := backendName + ' (' + user + ')'
+  else
+    label_ := backendName;
+
   if action = 'set' then begin
-    value := PromptSecret('Key for ' + backendName + ': ');
+    value := PromptSecret('Key for ' + label_ + ': ');
     if value = '' then
       raise EMagicError.Create('No key entered; nothing was stored.');
-    if not KeyringStore(backendName, value) then
+    if not KeyringStore(account, value) then
       raise EMagicError.Create('Could not store the key: ' + KeyringLastError + '.');
-    gLog.Info('Stored the ' + backendName + ' key in the keyring.');
+    gLog.Info('Stored the ' + label_ + ' key in the keyring.');
   end
   else if action = 'get' then begin
-    if KeyringLookup(backendName, value) then
+    if KeyringLookup(account, value) then
       Writeln(value)
     else if KeyringLastError <> '' then
       raise EMagicError.Create('Keyring error: ' + KeyringLastError + '.')
     else
-      raise EMagicError.CreateFmt('No key is stored for "%s".', [backendName]);
+      raise EMagicError.CreateFmt('No key is stored for %s.', [label_]);
   end
   else begin  { rm }
-    if KeyringClear(backendName) then
-      gLog.Info('Removed the ' + backendName + ' key from the keyring.')
+    if KeyringClear(account) then
+      gLog.Info('Removed the ' + label_ + ' key from the keyring.')
     else if KeyringLastError <> '' then
       raise EMagicError.Create('Could not remove the key: ' + KeyringLastError + '.')
     else
-      gLog.Info('No key was stored for ' + backendName + '; nothing to remove.');
+      gLog.Info('No key was stored for ' + label_ + '; nothing to remove.');
   end;
 end;
 

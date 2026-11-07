@@ -23,18 +23,20 @@ interface
   through their own return value and LastError. }
 function KeyringAvailable: boolean;
 
-{** Reads the stored key for backend into value. Returns True when an entry was
-  found, False when there is none or the keyring is unavailable. A transport
-  failure (no keyring answering) returns False and sets LastError. }
-function KeyringLookup(const backend: string; out value: string): boolean;
+{** Reads the stored key for account into value. account is an opaque key, the
+  caller's choice (magicdl uses the backend name, or "backend:user" to keep
+  several accounts of one backend apart). Returns True when an entry was found,
+  False when there is none or the keyring is unavailable. A transport failure
+  (no keyring answering) returns False and sets LastError. }
+function KeyringLookup(const account: string; out value: string): boolean;
 
-{** Stores value as the key for backend, replacing any existing entry. Returns
+{** Stores value as the key for account, replacing any existing entry. Returns
   True on success; on failure returns False and sets LastError. }
-function KeyringStore(const backend, value: string): boolean;
+function KeyringStore(const account, value: string): boolean;
 
-{** Removes the stored key for backend. Returns True when an entry was removed,
+{** Removes the stored key for account. Returns True when an entry was removed,
   False when there was none or on failure (LastError is set for a failure). }
-function KeyringClear(const backend: string): boolean;
+function KeyringClear(const account: string): boolean;
 
 {** A human-readable description of the last failure, for the caller to report.
   Empty when the last call succeeded. }
@@ -191,7 +193,7 @@ begin
   Result := gLastError;
 end;
 
-function KeyringLookup(const backend: string; out value: string): boolean;
+function KeyringLookup(const account: string; out value: string): boolean;
 var
   err: PGError;
   raw: PChar;
@@ -202,7 +204,7 @@ begin
     Exit;
   gLastError := '';
   err := nil;
-  raw := gSecretLookup(@gSchema, nil, err, AccountAttr, PChar(backend), nil);
+  raw := gSecretLookup(@gSchema, nil, err, AccountAttr, PChar(account), nil);
   if err <> nil then begin
     TakeError(err, 'keyring lookup failed');
     Exit;
@@ -214,7 +216,7 @@ begin
   Result := True;
 end;
 
-function KeyringStore(const backend, value: string): boolean;
+function KeyringStore(const account, value: string): boolean;
 var
   err: PGError;
 begin
@@ -228,12 +230,12 @@ begin
   err := nil;
   { collection nil selects the default keyring. }
   Result := gSecretStore(@gSchema, nil, SecretLabel, PChar(value), nil, err,
-    AccountAttr, PChar(backend), nil) <> 0;
+    AccountAttr, PChar(account), nil) <> 0;
   if not Result then
     TakeError(err, 'keyring store failed');
 end;
 
-function KeyringClear(const backend: string): boolean;
+function KeyringClear(const account: string): boolean;
 var
   err: PGError;
 begin
@@ -245,7 +247,7 @@ begin
   end;
   gLastError := '';
   err := nil;
-  Result := gSecretClear(@gSchema, nil, err, AccountAttr, PChar(backend),
+  Result := gSecretClear(@gSchema, nil, err, AccountAttr, PChar(account),
     nil) <> 0;
   if err <> nil then begin
     TakeError(err, 'keyring clear failed');

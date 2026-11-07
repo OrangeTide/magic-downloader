@@ -93,7 +93,16 @@ extension selects HTML). The list filters scope the manifest.
 .TP
 .BI "key " "set|get|rm"
 Manage a backend's key in the system keyring; needs
-.BR \-\-backend .
+.BR \-\-backend ,
+and an optional
+.B \-\-user
+to keep several accounts of one backend apart (the plain form is the default
+account, a named one is used only when the same
+.B \-\-user
+is given to
+.B index
+or
+.BR sync ).
 .B set
 reads a key from the terminal without echoing it (or from standard input when
 piped) and stores it;
