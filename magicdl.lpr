@@ -1055,16 +1055,19 @@ var
   i, j, matched, mismatched, missing: LongInt;
   found: boolean;
 begin
+  { Decide first whether anything is held locally. If not, report it without
+    contacting the store, so a check over a large library makes a request only
+    for the items actually on disk. }
+  importedPath := index.GetImportedPath(backendName, item.id);
+  files := index.ItemFiles(backendName, item.id);
+  if (importedPath = '') and (Length(files) = 0) then
+    exit('not-downloaded');
+
   targets := backend.ResolveFiles(item, availability);
   if availability = avPreorder then
     exit('preorder');
   if (availability <> avAvailable) or (Length(targets) = 0) then
     exit('unavailable');
-
-  importedPath := index.GetImportedPath(backendName, item.id);
-  files := index.ItemFiles(backendName, item.id);
-  if (importedPath = '') and (Length(files) = 0) then
-    exit('not-downloaded');
 
   matched := 0;
   mismatched := 0;
