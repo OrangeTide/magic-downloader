@@ -65,6 +65,9 @@ type
     title: string;
     versionKey: string;  { backend change signal, e.g. release date }
     releasedAt: string;  { when this version releases; future => preorder }
+    hash: string;        { expected content hash of the file, when the store
+                           reports one (used by `check`); empty if unknown }
+    hashAlgo: string;    { the hash algorithm: 'md5', 'sha256', or '' }
   end;
   TDownloadTargetArray = array of TDownloadTarget;
 

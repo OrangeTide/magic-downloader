@@ -134,6 +134,8 @@ type
       empty). Such items are skipped by sync. }
     procedure SetImported(const backend, backendId, path: string);
     function IsImported(const backend, backendId: string): boolean;
+    {** The recorded local path of an imported (adopted) item, or '' if none. }
+    function GetImportedPath(const backend, backendId: string): string;
 
     {** Records that oldId's entitlement now lives under newId. Both must already
       exist. The old item keeps its history and files but is skipped by sync. }
@@ -495,9 +497,15 @@ begin
 end;
 
 function TMagicIndex.IsImported(const backend, backendId: string): boolean;
+begin
+  IsImported := GetImportedPath(backend, backendId) <> '';
+end;
+
+function TMagicIndex.GetImportedPath(const backend, backendId: string): string;
 var
   q: TSQLQuery;
 begin
+  Result := '';
   q := NewQuery;
   try
     q.SQL.Text :=
@@ -506,7 +514,8 @@ begin
     q.ParamByName('backend').AsString := backend;
     q.ParamByName('backend_id').AsString := backendId;
     q.Open;
-    IsImported := (not q.EOF) and (not q.Fields[0].IsNull);
+    if (not q.EOF) and (not q.Fields[0].IsNull) then
+      Result := q.Fields[0].AsString;
     q.Close;
   finally
     q.Free;

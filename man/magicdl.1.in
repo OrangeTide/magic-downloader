@@ -50,6 +50,15 @@ re\-hashes present files to detect changed content;
 .B \-\-rescan
 hashes the output tree and relocates files that were moved, matched by hash.
 .TP
+.BI "check " "[id...]"
+Compare local copies to the store's current version by hash, reporting each item
+as current, outdated (a local file differs), incomplete (missing a current
+file), or not\-downloaded. Unlike
+.BR verify ,
+which checks against what magicdl recorded, this asks the store, so it catches
+updates to downloaded or adopted items. It resolves and hashes each item; scope
+it with item ids or the list filters.
+.TP
 .B status
 Show a summary of the collection: item and version counts, per\-format and
 per\-backend breakdowns, and total size.

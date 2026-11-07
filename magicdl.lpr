@@ -111,6 +111,8 @@ begin
   Writeln('  sync [<id>...]             Download items: full listing, given ids,');
   Writeln('                             or --from-index to use the stored index');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
+  Writeln('  check [<id>...]            Compare local copies to the store''s current');
+  Writeln('                             version by hash (outdated/current/...)');
   Writeln('  status                     Show a summary of the collection state');
   Writeln('  list                       List items, with filters (see below)');
   Writeln('  details <id>               Show one item''s versions and files');
@@ -1034,6 +1036,189 @@ begin
     until FindNext(info) <> 0;
   finally
     FindClose(info);
+  end;
+end;
+
+{** Compares an item's local files to the store's current version by hash and
+  returns a one-word state: 'current' (every current file held locally matches,
+  none missing), 'outdated' (a local file's hash differs from the current one),
+  'incomplete' (present files match but some current files are not held),
+  'not-downloaded' (nothing local), or 'preorder'/'unavailable' from the store.
+  'unknown' when the store offers no hash to compare. }
+function CheckItemState(backend: TMagicBackend; const backendName: string;
+  index: TMagicIndex; const item: TCollectionItem): string;
+var
+  targets: TDownloadTargetArray;
+  availability: TAvailability;
+  files: TFileInfoArray;
+  importedPath, cand, localPath, localHash: string;
+  i, j, matched, mismatched, missing: LongInt;
+  found: boolean;
+begin
+  targets := backend.ResolveFiles(item, availability);
+  if availability = avPreorder then
+    exit('preorder');
+  if (availability <> avAvailable) or (Length(targets) = 0) then
+    exit('unavailable');
+
+  importedPath := index.GetImportedPath(backendName, item.id);
+  files := index.ItemFiles(backendName, item.id);
+  if (importedPath = '') and (Length(files) = 0) then
+    exit('not-downloaded');
+
+  matched := 0;
+  mismatched := 0;
+  missing := 0;
+  for i := 0 to High(targets) do begin
+    { Find the local file for this current target: a recorded present file of
+      the same name, or, for an adopted item, the file in the imported folder. }
+    localPath := '';
+    found := false;
+    for j := 0 to High(files) do
+      if (files[j].name = targets[i].name) and (files[j].state = 'present') then begin
+        localPath := files[j].path;
+        found := true;
+        break;
+      end;
+    if (not found) and (importedPath <> '') then begin
+      cand := IncludeTrailingPathDelimiter(importedPath) +
+        SanitizeName(targets[i].suggestedName);
+      if FileExists(cand) then begin
+        localPath := cand;
+        found := true;
+      end
+      else begin
+        cand := IncludeTrailingPathDelimiter(importedPath) + targets[i].suggestedName;
+        if FileExists(cand) then begin
+          localPath := cand;
+          found := true;
+        end;
+      end;
+    end;
+    if (not found) or (not FileExists(localPath)) then begin
+      Inc(missing);
+      continue;
+    end;
+
+    if (targets[i].hash <> '') and (targets[i].hashAlgo <> '') then begin
+      try
+        localHash := HashFile(targets[i].hashAlgo, localPath);
+      except
+        on E: Exception do begin
+          gLog.Debug(Format('  hash failed for %s: %s', [localPath, E.Message]));
+          Inc(missing);
+          continue;
+        end;
+      end;
+      if SameText(localHash, targets[i].hash) then
+        Inc(matched)
+      else
+        Inc(mismatched);
+    end
+    else
+      Inc(matched);  { present but no hash to verify against }
+  end;
+
+  if mismatched > 0 then
+    CheckItemState := 'outdated'
+  else if missing > 0 then
+    CheckItemState := 'incomplete'
+  else if matched > 0 then
+    CheckItemState := 'current'
+  else
+    CheckItemState := 'unknown';
+end;
+
+{** Reports, per item, whether the local copy matches the store's current
+  version (see CheckItemState). Scope it with item ids or the list filters, as
+  it resolves and hashes each item. }
+procedure CmdCheck;
+var
+  backendClass: TMagicBackendClass;
+  backend: TMagicBackend;
+  s: TSession;
+  ctx: TMagicContext;
+  f: TItemFilter;
+  only: TStringArray;
+  indexed: TIndexedItemArray;
+  detail: TItemDetail;
+  item: TCollectionItem;
+  backendName: string;
+  i, nCur, nOut, nInc, nNo, nUnavail: LongInt;
+
+  procedure Report(const it: TCollectionItem);
+  var
+    st: string;
+  begin
+    try
+      st := CheckItemState(backend, backendName, s.index, it);
+    except
+      on E: Exception do begin
+        gLog.Warn(Format('  check failed for %s: %s', [it.id, E.Message]));
+        Inc(nUnavail);
+        exit;
+      end;
+    end;
+    if st = 'current' then Inc(nCur)
+    else if st = 'outdated' then Inc(nOut)
+    else if st = 'incomplete' then Inc(nInc)
+    else if st = 'not-downloaded' then Inc(nNo)
+    else Inc(nUnavail);  { preorder, unavailable, unknown }
+    gLog.Info(Format('  %-14s %s  [%s]', [st, ItemDisplayName(it), it.id]));
+  end;
+
+begin
+  backendClass := RequireBackend(backendName);
+  only := Positionals(['--backend', '--db', '--status', '--limit', '--format',
+    '--user', '--app-key', '--app-key-file', '--cookies', '--interval-ms',
+    '--retries', '--timeout-ms', '--scope']);
+  nCur := 0; nOut := 0; nInc := 0; nNo := 0; nUnavail := 0;
+  s := OpenSession;
+  try
+    ctx := BuildContext(s.index, s.cookies, s.http, backendName);
+    backend := backendClass.Create(ctx);
+    try
+      LoadCookies(backendClass, s.cookies);
+      backend.Authenticate;
+      if Length(only) > 0 then begin
+        for i := 0 to High(only) do begin
+          if not s.index.GetItem(backendName, only[i], detail) then begin
+            gLog.Warn(Format('item "%s" is not indexed; run index first',
+              [only[i]]));
+            continue;
+          end;
+          item := Default(TCollectionItem);
+          item.id := detail.backendId;
+          item.title := detail.title;
+          item.artist := detail.creator;
+          item.itemType := detail.kind;
+          item.pageUrl := detail.pageUrl;
+          Report(item);
+        end;
+      end
+      else begin
+        f := ParseItemFilter;
+        f.backend := backendName;
+        indexed := s.index.ListItems(f);
+        gLog.Info(Format('Checking %d item(s) against %s...',
+          [Length(indexed), backendName]));
+        for i := 0 to High(indexed) do begin
+          item := Default(TCollectionItem);
+          item.id := indexed[i].backendId;
+          item.title := indexed[i].title;
+          item.artist := indexed[i].creator;
+          item.pageUrl := indexed[i].pageUrl;
+          Report(item);
+        end;
+      end;
+      gLog.Info(Format(
+        '%d current, %d outdated, %d incomplete, %d not downloaded, %d other.',
+        [nCur, nOut, nInc, nNo, nUnavail]));
+    finally
+      backend.Free;
+    end;
+  finally
+    CloseSession(s);
   end;
 end;
 
@@ -2127,6 +2312,7 @@ begin
         'scopes': CmdScopes;
         'index': CmdIndex;
         'sync': CmdSync;
+        'check': CmdCheck;
         'verify': CmdVerify;
         'status': CmdStatus;
         'list': CmdList;

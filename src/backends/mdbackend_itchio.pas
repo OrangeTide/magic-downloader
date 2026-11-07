@@ -537,6 +537,10 @@ begin
       target.artist := item.artist;
       target.title := item.title;
       target.suggestedName := fname;
+      { itch.io reports an MD5 per upload (sha256 is null); `check` uses it. }
+      target.hash := upload.Get('md5_hash', '');
+      if target.hash <> '' then
+        target.hashAlgo := 'md5';
       target.downloadUrl := BASE_URL + Format(
         '/uploads/%d/download?api_key=%s&download_key_id=%s',
         [upload.Get('id', Int64(0)), fCtx.apiKey, dlKeyId]);

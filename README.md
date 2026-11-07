@@ -322,6 +322,7 @@ needing `--html`.
 ```
 magicdl verify --rehash                 # confirm files are present and unchanged
 magicdl verify --rescan --out <dir>     # relocate files you moved, matched by hash
+magicdl check --backend itchio          # which local copies are the store's latest
 magicdl blacklist <id> --reason "dup"   # sync will skip these items
 magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
@@ -342,6 +343,28 @@ magicdl import --backend itchio ~/itch-archive --dry-run
 ```
 
 Bandcamp instead matches an `Artist/YYYY - Album` music library by name.
+
+`verify` checks files against what magicdl recorded when it downloaded them.
+`check` is different: it asks the store for each item's current version and
+compares your local files to it by hash, so it catches items that have been
+updated since you downloaded or hand-archived them. It reports each item as:
+
+ * **current** — every current file you hold matches the store.
+ * **outdated** — a local file's hash differs from the current one (you have an
+   old version).
+ * **incomplete** — the files you hold are current, but the store has files you
+   do not have locally.
+ * **not-downloaded** — nothing held locally for this item.
+
+```
+magicdl check --backend itchio 12345:67890     # one item
+magicdl check --backend itchio --limit 50       # the first 50 indexed items
+```
+
+`check` resolves and hashes each item, so it makes a request per item and reads
+each local file. Scope it with item ids or the list filters (`--limit`,
+`--status`, and so on). itch.io reports an MD5 per file, which is what the
+comparison uses.
 
 ## How it stores things
 
