@@ -328,6 +328,7 @@ magicdl allow <id>                      # remove from the blacklist
 magicdl relocate <old-id> <new-id>      # record that an item moved to a new id
 magicdl reorganize <dir> --backend itchio  # fold loose files into slug folders
 magicdl import <dir> --backend itchio   # adopt a hand-built archive
+magicdl forget <id>... --backend itchio # drop the adopted mark so sync fetches it
 ```
 
 `import` marks indexed items whose files already sit in a local directory, so
@@ -360,6 +361,17 @@ magicdl reorganize --backend itchio ~/itch-archive
 
 Files are moved, never copied or deleted, and a file is left in place if one of
 the same name already sits in the target folder.
+
+An adopted item is skipped by `sync`, since its files are already on disk. When
+the store later has a newer version, `forget` clears that mark so `sync` fetches
+it again. The files on disk are left in place; `forget` only drops magicdl's
+record that the item was already owned locally. After the fetch the item is
+tracked by its downloaded files instead.
+
+```
+magicdl forget --backend itchio 118681908:947595
+magicdl sync --backend itchio --from-index --out <dir> 118681908:947595
+```
 
 `verify` checks files against what magicdl recorded when it downloaded them.
 `check` is different: it asks the store for each item's current version and

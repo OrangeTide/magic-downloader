@@ -84,6 +84,14 @@ Remove items from the blacklist.
 Record that an item moved from one id to another. The old item is skipped by
 .BR sync .
 .TP
+.BI "forget " "id..."
+Clear the adopted mark on the given items, so
+.B sync
+no longer skips them and will fetch them again. The files on disk are left in
+place; this only forgets that magicdl treated the item as already owned
+locally. Use it to refresh an item adopted from an archive once the store has a
+newer version. An item that was not adopted is reported and left unchanged.
+.TP
 .BI "reorganize " dir
 Fold loose files in a path\-based archive into the per\-item subfolders the
 backend expects, so
@@ -277,7 +285,7 @@ Omit the download checkboxes and the download tally.
 .TP
 .B \-\-json
 Machine\-readable output for
-.BR status ", " list ", " details ", " verify ", " blacklist ", " allow ", and " relocate .
+.BR status ", " list ", " details ", " verify ", " blacklist ", " allow ", " relocate ", and " forget .
 .TP
 .BI "\-\-interval\-ms " n
 Base delay between requests. Default 3000.

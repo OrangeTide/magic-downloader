@@ -119,6 +119,7 @@ begin
   Writeln('  blacklist <id>...          Mark items so sync skips them');
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
+  Writeln('  forget <id>...             Clear the adopted mark so sync fetches again');
   Writeln('  reorganize <dir>           Fold loose files into <user>.itch.io/<slug>');
   Writeln('                             folders (itchio; single-owner hosts)');
   Writeln('  import <dir>               Mark items already in an Artist/Album library');
@@ -1867,6 +1868,91 @@ begin
   SetBlacklistForIds(false, '');
 end;
 
+{** Clears the adopted (imported) mark on the item ids given, so sync stops
+  skipping them and fetches them again. The files on disk are left untouched;
+  this only forgets that magicdl considered the item already owned locally. Use
+  it to refresh an adopted item whose store version has changed. }
+procedure CmdForget;
+var
+  backendName: string;
+  ids: TStringArray;
+  index: TMagicIndex;
+  i, cleared, notAdopted: LongInt;
+  jsonMode: boolean;
+  clearedIds, notIndexed, notAdoptedIds: TStringList;
+  root: TJSONObject;
+  arr: TJSONArray;
+begin
+  backendName := ArgValue('--backend', '');
+  if FindBackend(backendName) = nil then
+    raise EMagicError.CreateFmt('Unknown backend: "%s". Try list-backends.',
+      [backendName]);
+  ids := Positionals(['--backend', '--db']);
+  if Length(ids) = 0 then
+    raise EMagicError.Create('Give at least one item id.');
+  jsonMode := HasFlag('--json');
+
+  clearedIds := TStringList.Create;
+  notIndexed := TStringList.Create;
+  notAdoptedIds := TStringList.Create;
+  index := TMagicIndex.Create(ResolveDbPath);
+  try
+    cleared := 0;
+    notAdopted := 0;
+    for i := 0 to High(ids) do begin
+      if not index.ItemExists(backendName, ids[i]) then begin
+        notIndexed.Add(ids[i]);
+        if not jsonMode then
+          gLog.Warn(Format('item "%s" is not indexed; run index first',
+            [ids[i]]));
+        continue;
+      end;
+      if not index.IsImported(backendName, ids[i]) then begin
+        notAdoptedIds.Add(ids[i]);
+        Inc(notAdopted);
+        if not jsonMode then
+          gLog.Info(Format('  not adopted: %s', [ids[i]]));
+        continue;
+      end;
+      index.SetImported(backendName, ids[i], '');
+      clearedIds.Add(ids[i]);
+      Inc(cleared);
+    end;
+    index.Commit;
+
+    if jsonMode then begin
+      root := TJSONObject.Create;
+      try
+        root.Add('action', 'forget');
+        root.Add('cleared', cleared);
+        arr := TJSONArray.Create;
+        for i := 0 to clearedIds.Count - 1 do
+          arr.Add(clearedIds[i]);
+        root.Add('ids', arr);
+        arr := TJSONArray.Create;
+        for i := 0 to notAdoptedIds.Count - 1 do
+          arr.Add(notAdoptedIds[i]);
+        root.Add('not_adopted', arr);
+        arr := TJSONArray.Create;
+        for i := 0 to notIndexed.Count - 1 do
+          arr.Add(notIndexed[i]);
+        root.Add('not_indexed', arr);
+        Writeln(root.FormatJSON);
+      finally
+        root.Free;
+      end;
+    end
+    else
+      gLog.Info(Format('Forgot %d adopted item(s); %d were not adopted.',
+        [cleared, notAdopted]));
+  finally
+    index.Free;
+    clearedIds.Free;
+    notIndexed.Free;
+    notAdoptedIds.Free;
+  end;
+end;
+
 {** Strips a leading "YYYY - " (year and separator) from an album folder name,
   matching how the reference tool prefixes album folders. }
 function StripYearPrefix(const s: string): string;
@@ -2498,6 +2584,7 @@ begin
         'list': CmdList;
         'details': CmdDetails;
         'relocate': CmdRelocate;
+        'forget': CmdForget;
         'reorganize': CmdReorganize;
         'import': CmdImport;
         'manifest': CmdManifest;
