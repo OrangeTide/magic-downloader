@@ -112,6 +112,21 @@ Backend to use (see
 .BI "\-\-user " name
 Store account or fan\-page handle (Bandcamp).
 .TP
+.BI "\-\-scope " ref
+Restrict
+.B index
+or
+.B sync
+to a subset of the collection named by
+.IR ref ,
+instead of the whole collection. The reference is backend specific: for itch.io
+it is a bundle link
+.RB ( https://itch.io/b/ \fIid\fR / \fIslug\fR ", or the numeric " id ),
+and only items you own from that bundle are listed. A scoped
+.B index
+does not sweep, so it will not mark the rest of your library removed. A backend
+that does not support scoping reports so.
+.TP
 .BI "\-\-app\-key " key
 Application or API key (DriveThruRPG, itch.io). Exposes the key in the process
 list; prefer the keyring or the file form.

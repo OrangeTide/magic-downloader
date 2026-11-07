@@ -125,6 +125,8 @@ begin
   Writeln('Options:');
   Writeln('  --backend <name>           Backend to use');
   Writeln('  --user <name>              Store account/user name (bandcamp)');
+  Writeln('  --scope <ref>              Index/sync only a subset: an itch.io bundle');
+  Writeln('                             link (per-backend; see the backend docs)');
   Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
@@ -405,6 +407,32 @@ begin
   index.Commit;
 end;
 
+{** Lists and indexes a scope (a bundle, collection, ...) rather than the whole
+  collection. It upserts only the scope's items and does NOT sweep, since it saw
+  only part of the collection and must not mark the rest removed. }
+procedure IndexScope(backend: TMagicBackend; index: TMagicIndex;
+  const backendName, scopeRef: string; out items: TCollectionItemArray);
+var
+  seen: string;
+  i: LongInt;
+begin
+  seen := NowIsoUtc;
+  items := backend.ListScope(scopeRef);
+  for i := 0 to High(items) do
+    index.UpsertItem(backendName, items[i], seen);
+  index.Commit;
+end;
+
+{** The --scope reference, validated against the backend. Raises when --scope was
+  given but the backend cannot resolve one. Returns '' when --scope is absent. }
+function ScopeArg(backend: TMagicBackend; const backendName: string): string;
+begin
+  Result := ArgValue('--scope', '');
+  if (Result <> '') and not backend.SupportsScope then
+    raise EMagicError.CreateFmt(
+      'Backend "%s" does not support --scope.', [backendName]);
+end;
+
 procedure CmdIndex;
 var
   backendClass: TMagicBackendClass;
@@ -412,7 +440,7 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
-  backendName: string;
+  backendName, scope: string;
 begin
   backendClass := RequireBackend(backendName);
   s := OpenSession;
@@ -420,11 +448,18 @@ begin
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     backend := backendClass.Create(ctx);
     try
-      gLog.Info(Format('Indexing %s collection for "%s"...',
-        [backendName, ctx.user]));
+      scope := ScopeArg(backend, backendName);
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
-      IndexCollection(backend, s.index, backendName, items);
+      if scope <> '' then begin
+        gLog.Info(Format('Indexing %s scope "%s"...', [backendName, scope]));
+        IndexScope(backend, s.index, backendName, scope, items);
+      end
+      else begin
+        gLog.Info(Format('Indexing %s collection for "%s"...',
+          [backendName, ctx.user]));
+        IndexCollection(backend, s.index, backendName, items);
+      end;
       gLog.Info(Format('Indexed %d items (%d total in database).',
         [Length(items), s.index.CountItems(backendName)]));
     finally
@@ -631,14 +666,14 @@ var
   item: TCollectionItem;
   i, fetched: LongInt;
   withCovers: boolean;
-  backendName: string;
+  backendName, scope: string;
 begin
   backendClass := RequireBackend(backendName);
   withCovers := HasFlag('--covers');
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
-    '--timeout-ms', '--status', '--limit']);
+    '--timeout-ms', '--status', '--limit', '--scope']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
@@ -649,6 +684,7 @@ begin
     try
       gLog.Info(Format('Syncing %s collection for "%s"...',
         [backendName, ctx.user]));
+      scope := ScopeArg(backend, backendName);
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
 
@@ -671,6 +707,15 @@ begin
           if SyncItem(backend, ctx, backendName, item, withCovers) then
             Inc(fetched);
         end;
+      end
+      else if scope <> '' then begin
+        { Scoped sync: list only the scope (a bundle, ...), index it without
+          sweeping, and download those items. }
+        IndexScope(backend, s.index, backendName, scope, items);
+        gLog.Info(Format('%d item(s) in scope.', [Length(items)]));
+        for i := 0 to High(items) do
+          if SyncItem(backend, ctx, backendName, items[i], withCovers) then
+            Inc(fetched);
       end
       else if HasFlag('--from-index') then begin
         { Download everything already indexed, without re-listing from the API.

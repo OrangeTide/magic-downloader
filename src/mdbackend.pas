@@ -57,6 +57,20 @@ type
     {** Returns every item in the user's collection. Does not download anything. }
     function ListCollection: TCollectionItemArray; virtual; abstract;
 
+    {** True when this backend can resolve a scope: a user-supplied reference to
+      a subset of a collection. The reference is backend specific, for example
+      an itch.io bundle link, and later a Bandcamp wishlist, an audiobook series
+      page, or another user's favorites list. Default: not supported. }
+    function SupportsScope: boolean; virtual;
+
+    {** Returns the collection items belonging to scopeRef, in the same shape as
+      ListCollection, so the rest of the pipeline (index, cover, file
+      resolution, sync) is unchanged. scopeRef is whatever the user passed to
+      --scope; each backend documents the forms it accepts and raises
+      EMagicError on a malformed or unsupported reference. Only called when
+      SupportsScope is true. }
+    function ListScope(const scopeRef: string): TCollectionItemArray; virtual;
+
     {** Resolves the cover image URL for an item, or '' when none exists. }
     function ResolveCoverUrl(const item: TCollectionItem): string; virtual; abstract;
 
@@ -92,6 +106,18 @@ end;
 class function TMagicBackend.CookieHost: string;
 begin
   CookieHost := '';
+end;
+
+function TMagicBackend.SupportsScope: boolean;
+begin
+  SupportsScope := false;
+end;
+
+function TMagicBackend.ListScope(const scopeRef: string): TCollectionItemArray;
+begin
+  Result := nil;
+  raise EMagicError.CreateFmt(
+    'Backend "%s" does not support --scope.', [BackendName]);
 end;
 
 procedure RegisterBackend(aClass: TMagicBackendClass);
