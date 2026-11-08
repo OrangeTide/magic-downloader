@@ -134,19 +134,46 @@ begin
   fUserAgent := aUserAgent;
 end;
 
+{** Decodes RFC 3986 percent-escapes (%XX) to their bytes, leaving other
+  characters as they are. The escaped bytes are UTF-8 here, which the program's
+  UTF-8 code page carries through unchanged. A malformed escape is kept verbatim. }
+function PercentDecode(const s: string): string;
+var
+  i, code: LongInt;
+begin
+  PercentDecode := '';
+  i := 1;
+  while i <= Length(s) do begin
+    if (s[i] = '%') and (i + 2 <= Length(s)) then begin
+      code := StrToIntDef('$' + Copy(s, i + 1, 2), -1);
+      if code >= 0 then begin
+        PercentDecode := PercentDecode + Chr(code);
+        Inc(i, 3);
+        continue;
+      end;
+    end;
+    PercentDecode := PercentDecode + s[i];
+    Inc(i);
+  end;
+end;
+
 {** Extracts the filename from a Content-Disposition header value, or '' when it
   carries none. Handles both filename= and filename*=UTF-8''... forms, taking the
-  last path component and stripping quotes. }
+  last path component and stripping quotes. The extended form is percent-encoded
+  (RFC 5987), so its value is decoded. }
 function FilenameFromDisposition(const disposition: string): string;
 var
   p, q: LongInt;
   s: string;
+  extended: boolean;
 begin
   FilenameFromDisposition := '';
   s := disposition;
+  extended := false;
   { Prefer the RFC 5987 extended form when present. }
   p := Pos('filename*=', s);
   if p > 0 then begin
+    extended := true;
     s := Copy(s, p + Length('filename*='), Length(s));
     q := Pos('''''', s);
     if q > 0 then
@@ -165,6 +192,8 @@ begin
   s := Trim(s);
   if (Length(s) >= 2) and (s[1] = '"') and (s[Length(s)] = '"') then
     s := Copy(s, 2, Length(s) - 2);
+  if extended then
+    s := PercentDecode(s);
   FilenameFromDisposition := ExtractFileName(s);
 end;
 
