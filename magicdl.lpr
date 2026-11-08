@@ -1155,6 +1155,27 @@ end;
   offers no hash to compare. A current upload is matched to a local file by name
   first (so a changed same-name file reads outdated), then by content hash, so a
   renamed but byte-identical copy still counts as held. }
+{** True when dir exists and holds at least one regular file. An extracted
+  archive is recorded as the album directory, not a file, so presence and
+  verify both use this to recognise it (FileExists rejects a directory). }
+function DirHasFiles(const dir: string): boolean;
+var
+  sr: TSearchRec;
+begin
+  DirHasFiles := false;
+  if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faAnyFile, sr) = 0 then
+  try
+    repeat
+      if (sr.Attr and faDirectory) = 0 then begin
+        DirHasFiles := true;
+        break;
+      end;
+    until FindNext(sr) <> 0;
+  finally
+    FindClose(sr);
+  end;
+end;
+
 function CheckItemState(backend: TMagicBackend; const backendName: string;
   index: TMagicIndex; const item: TCollectionItem): string;
 var
@@ -1166,26 +1187,6 @@ var
   i, j, k, nameIdx, matched, mismatched, missing: LongInt;
   rec: TSearchRec;
   found, fbFound, hasExtractedDir: boolean;
-
-  { True when dir exists and holds at least one regular file. Used to recognise
-    an extracted archive, whose recorded "file" is the album directory. }
-  function DirHasFiles(const dir: string): boolean;
-  var
-    sr: TSearchRec;
-  begin
-    DirHasFiles := false;
-    if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faAnyFile, sr) = 0 then
-    try
-      repeat
-        if (sr.Attr and faDirectory) = 0 then begin
-          DirHasFiles := true;
-          break;
-        end;
-      until FindNext(sr) <> 0;
-    finally
-      FindClose(sr);
-    end;
-  end;
 
   { Hashes local file k with algorithm a, caching the result (and a sentinel
     '?' on failure) so each local file is hashed at most once per algorithm. }
@@ -1451,9 +1452,12 @@ begin
     didRescan := false;
     seen := NowIsoUtc;
 
-    { Pass 1: presence, and optional integrity check of present files. }
+    { Pass 1: presence, and optional integrity check of present files. A record
+      whose path is a non-empty directory is an extracted archive (the album
+      folder), present even though FileExists only matches a regular file. }
     for i := 0 to High(files) do begin
-      if FileExists(files[i].path) then begin
+      if FileExists(files[i].path)
+        or (DirectoryExists(files[i].path) and DirHasFiles(files[i].path)) then begin
         if rehash and (files[i].sha256 <> '') then
           if Sha256File(files[i].path) <> files[i].sha256 then begin
             Inc(mismatched);
