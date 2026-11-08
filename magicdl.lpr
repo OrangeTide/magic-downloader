@@ -1037,6 +1037,15 @@ begin
   SyncItem := fetchedAny;
 end;
 
+{** Draws the sync progress line: position, total, and how many items are left
+  to consider after this one. idx is 0-based. A no-op off an interactive
+  terminal (see mdlog), so it costs nothing when output is redirected. }
+procedure SyncProgress(idx, total: LongInt; const item: TCollectionItem);
+begin
+  gLog.Progress(Format('[%d/%d] %d left: %s',
+    [idx + 1, total, total - (idx + 1), ItemDisplayName(item)]));
+end;
+
 procedure CmdSync;
 var
   backendClass: TMagicBackendClass;
@@ -1089,6 +1098,7 @@ begin
           item.artist := detail.creator;
           item.itemType := detail.kind;
           item.pageUrl := detail.pageUrl;
+          SyncProgress(i, Length(only), item);
           if SyncItem(backend, ctx, backendName, item, withCovers) then
             Inc(fetched);
         end;
@@ -1098,9 +1108,11 @@ begin
           sweeping, and download those items. }
         IndexScope(backend, s.index, backendName, scope, items);
         gLog.Info(Format('%d item(s) in scope.', [Length(items)]));
-        for i := 0 to High(items) do
+        for i := 0 to High(items) do begin
+          SyncProgress(i, Length(items), items[i]);
           if SyncItem(backend, ctx, backendName, items[i], withCovers) then
             Inc(fetched);
+        end;
       end
       else if HasFlag('--from-index') then begin
         { Download everything already indexed, without re-listing from the API.
@@ -1117,6 +1129,7 @@ begin
           item.artist := filtered[i].creator;
           item.itemType := filtered[i].kind;
           item.pageUrl := filtered[i].pageUrl;
+          SyncProgress(i, Length(filtered), item);
           if SyncItem(backend, ctx, backendName, item, withCovers) then
             Inc(fetched);
         end;
@@ -1125,10 +1138,13 @@ begin
         { Full sync: list the whole collection to catch new and changed items. }
         IndexCollection(backend, s.index, backendName, items);
         gLog.Info(Format('%d items in collection.', [Length(items)]));
-        for i := 0 to High(items) do
+        for i := 0 to High(items) do begin
+          SyncProgress(i, Length(items), items[i]);
           if SyncItem(backend, ctx, backendName, items[i], withCovers) then
             Inc(fetched);
+        end;
       end;
+      gLog.EndProgress;
       gLog.Info(Format('Sync done: %d fetched.', [fetched]));
     finally
       backend.Free;

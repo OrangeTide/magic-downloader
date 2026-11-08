@@ -523,6 +523,8 @@ begin
         end;
       lastToken := resp.Get('last_token', '');
       moreAvailable := resp.Get('more_available', false);
+      { Report the running count as pages come in; the total is not known yet. }
+      fCtx.log.Progress(Format('Listing: %d items read...', [Length(items)]));
     finally
       data.Free;
     end;
@@ -589,6 +591,7 @@ begin
         PageCollection(fanId, 'hidden_items', hiddenData.Get('last_token', ''),
           true, Result);
     end;
+    fCtx.log.EndProgress;
   finally
     blob.Free;
   end;

@@ -263,11 +263,14 @@ begin
           { Cache the file list so ResolveFiles can build download targets. }
           fProducts.AddObject(orderId, BuildProductCache(attrs));
         end;
+        { Report the running count as pages come in; total not known yet. }
+        fCtx.log.Progress(Format('Listing: %d items read...', [Length(Result)]));
       finally
         data.Free;
       end;
       Inc(page);
     end;
+    fCtx.log.EndProgress;
   finally
     pubs.Free;
   end;

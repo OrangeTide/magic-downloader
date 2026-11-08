@@ -243,11 +243,17 @@ begin
         SetLength(Result, n + 1);
         Result[n] := it;
       end;
+      { Whole-library listing: report the running count as pages come in. The
+        total is not known in advance, so show what has been read so far. }
+      if extraQuery = '' then
+        fCtx.log.Progress(Format('Listing: %d items read...', [Length(Result)]));
     finally
       data.Free;
     end;
     Inc(page);
   end;
+  if extraQuery = '' then
+    fCtx.log.EndProgress;
 end;
 
 function TItchIoBackend.ListCollection: TCollectionItemArray;
