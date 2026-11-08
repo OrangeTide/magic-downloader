@@ -106,7 +106,8 @@ begin
   Writeln;
   Writeln('Commands:');
   Writeln('  list-backends              List available backends');
-  Writeln('  scopes                     List a backend''s --scope refs (itchio: bundles)');
+  Writeln('  bundles                    List owned bundles to pass to --bundle (itchio)');
+  Writeln('  creators                   List creators in the index to pass to --creator');
   Writeln('  index                      Index a collection (no downloads)');
   Writeln('  sync [<id>...]             Download items: full listing, given ids,');
   Writeln('                             or --from-index to use the stored index');
@@ -133,10 +134,12 @@ begin
   Writeln('  --backend <name>           Backend to use');
   Writeln('  --user <name>              Account name: the bandcamp fan handle, or');
   Writeln('                             which keyring account to use (see key)');
-  Writeln('  --scope <ref>              Index/sync only a subset (itchio: a bundle');
-  Writeln('                             link, id, or title; see the scopes command)');
+  Writeln('  --bundle <ref>             Index/sync only one bundle (itchio: a bundle');
+  Writeln('                             link, id, or title; see the bundles command)');
+  Writeln('  --creator <name>           Index/sync only one creator''s items (itchio:');
+  Writeln('                             a creator name, username, or page URL)');
   Writeln('  --refresh                  Re-resolve items already downloaded (sync skips');
-  Writeln('                             them by default), and ignore the cached --scope result');
+  Writeln('                             them by default), and ignore the cached subset result');
   Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
@@ -626,7 +629,7 @@ begin
   if not HasFlag('--refresh') then begin
     age := ReadScopeCache(backendName, scopeRef, Result);
     if age >= 0 then begin
-      gLog.Info(Format('Using cached scope (%s old, %d item(s)); ' +
+      gLog.Info(Format('Using cached subset (%s old, %d item(s)); ' +
         '--refresh to update.', [HumanAge(age), Length(Result)]));
       exit;
     end;
@@ -651,14 +654,27 @@ begin
   index.Commit;
 end;
 
-{** The --scope reference, validated against the backend. Raises when --scope was
-  given but the backend cannot resolve one. Returns '' when --scope is absent. }
+{** The subset reference from --bundle or --creator, as a typed "<kind>:<value>"
+  string for the backend. The two are mutually exclusive. Raises when one is
+  given but the backend cannot resolve a subset. Returns '' when neither is
+  given. }
 function ScopeArg(backend: TMagicBackend; const backendName: string): string;
+var
+  bundleRef, creatorRef: string;
 begin
-  Result := ArgValue('--scope', '');
+  bundleRef := ArgValue('--bundle', '');
+  creatorRef := ArgValue('--creator', '');
+  if (bundleRef <> '') and (creatorRef <> '') then
+    raise EMagicError.Create('Use only one of --bundle or --creator.');
+  if bundleRef <> '' then
+    Result := 'bundle:' + bundleRef
+  else if creatorRef <> '' then
+    Result := 'creator:' + creatorRef
+  else
+    Result := '';
   if (Result <> '') and not backend.SupportsScope then
     raise EMagicError.CreateFmt(
-      'Backend "%s" does not support --scope.', [backendName]);
+      'Backend "%s" does not support --bundle or --creator.', [backendName]);
 end;
 
 {** A ' for "<account>"' clause for a banner line, or '' when the backend has no
@@ -672,10 +688,10 @@ begin
     ForAccount := '';
 end;
 
-{** Lists the scopes a backend offers for --scope, one per line as
+{** Lists the bundles a backend offers for --bundle, one per line as
   "<reference>  <description>". For itch.io these are the account's owned
-  bundles; the reference is a bundle link to pass to --scope. }
-procedure CmdScopes;
+  bundles; the reference is a bundle link to pass to --bundle. }
+procedure CmdBundles;
 var
   backendClass: TMagicBackendClass;
   backend: TMagicBackend;
@@ -695,13 +711,63 @@ begin
       backend.Authenticate;
       scopes := backend.ListScopes;
       if Length(scopes) = 0 then begin
-        gLog.Info(Format('%s offers no listable scopes.', [backendName]));
+        gLog.Info(Format('%s offers no listable bundles.', [backendName]));
         exit;
       end;
       for i := 0 to High(scopes) do
         Writeln(scopes[i].reference, '  ', scopes[i].caption);
     finally
       backend.Free;
+    end;
+  finally
+    CloseSession(s);
+  end;
+end;
+
+{** Lists the creators in the local index for a backend, with how many items are
+  owned from each, so the name can be passed to --creator. Reads the index only;
+  run `index` first to populate it. }
+procedure CmdCreators;
+var
+  s: TSession;
+  f: TItemFilter;
+  items: TIndexedItemArray;
+  names: TStringList;
+  backendName, name: string;
+  i, idx, count: LongInt;
+begin
+  RequireBackend(backendName);
+  s := OpenSession;
+  try
+    f := Default(TItemFilter);
+    f.backend := backendName;
+    items := s.index.ListItems(f);
+    names := TStringList.Create;
+    try
+      names.Sorted := true;
+      names.CaseSensitive := false;
+      { Tally items per creator; a blank creator is grouped as "(unknown)". }
+      for i := 0 to High(items) do begin
+        name := Trim(items[i].creator);
+        if name = '' then
+          name := '(unknown)';
+        idx := names.IndexOf(name);
+        if idx < 0 then
+          names.AddObject(name, TObject(PtrInt(1)))
+        else
+          names.Objects[idx] := TObject(PtrInt(PtrInt(names.Objects[idx]) + 1));
+      end;
+      if names.Count = 0 then begin
+        gLog.Info(Format('No %s items indexed yet; run "magicdl index" first.',
+          [backendName]));
+        exit;
+      end;
+      for i := 0 to names.Count - 1 do begin
+        count := PtrInt(names.Objects[i]);
+        Writeln(names[i], Format('  (%d item(s))', [count]));
+      end;
+    finally
+      names.Free;
     end;
   finally
     CloseSession(s);
@@ -727,7 +793,7 @@ begin
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
       if scope <> '' then begin
-        gLog.Info(Format('Indexing %s scope "%s"...', [backendName, scope]));
+        gLog.Info(Format('Indexing %s subset "%s"...', [backendName, scope]));
         IndexScope(backend, s.index, backendName, scope, items);
       end
       else begin
@@ -1067,7 +1133,8 @@ begin
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
-    '--timeout-ms', '--status', '--limit', '--scope', '--user-agent']);
+    '--timeout-ms', '--status', '--limit', '--bundle', '--creator',
+    '--user-agent']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
@@ -1104,10 +1171,10 @@ begin
         end;
       end
       else if scope <> '' then begin
-        { Scoped sync: list only the scope (a bundle, ...), index it without
-          sweeping, and download those items. }
+        { Subset sync: list only the subset (a bundle or creator), index it
+          without sweeping, and download those items. }
         IndexScope(backend, s.index, backendName, scope, items);
-        gLog.Info(Format('%d item(s) in scope.', [Length(items)]));
+        gLog.Info(Format('%d item(s) in subset.', [Length(items)]));
         for i := 0 to High(items) do begin
           SyncProgress(i, Length(items), items[i]);
           if SyncItem(backend, ctx, backendName, items[i], withCovers) then
@@ -1401,7 +1468,7 @@ begin
   backendClass := RequireBackend(backendName);
   only := Positionals(['--backend', '--db', '--status', '--limit', '--format',
     '--user', '--app-key', '--app-key-file', '--cookies', '--interval-ms',
-    '--retries', '--timeout-ms', '--scope', '--user-agent']);
+    '--retries', '--timeout-ms', '--bundle', '--creator', '--user-agent']);
   nCur := 0; nOut := 0; nInc := 0; nNo := 0; nUnavail := 0;
   s := OpenSession;
   try
@@ -2956,7 +3023,8 @@ begin
     try
       case command of
         'list-backends': CmdListBackends;
-        'scopes': CmdScopes;
+        'bundles': CmdBundles;
+        'creators': CmdCreators;
         'index': CmdIndex;
         'sync': CmdSync;
         'check': CmdCheck;

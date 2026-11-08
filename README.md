@@ -36,8 +36,8 @@ Planned:
  * gumroad
  * amazon (audiobooks and music)
 
-Also planned: more `--scope` sources, such as a Bandcamp favorites list or an
-Amazon audiobook series.
+Also planned: more subset sources for `--bundle`/`--creator`, such as a Bandcamp
+favorites list or an Amazon audiobook series.
 
 ## Requirements
 
@@ -256,41 +256,60 @@ item is still resolved and completed. Pass `--refresh` to re-resolve held items
 and pick up a store-side re-upload; `check` reports such updates without
 downloading.
 
-`--scope` narrows either `index` or `sync` to a subset of the collection. For
-itch.io a scope is one of your bundles. List them with `scopes`, which prints
-each bundle's link and title:
+`--bundle` and `--creator` narrow either `index` or `sync` to part of the
+collection, instead of the whole thing. They cannot be combined.
+
+For itch.io, `--bundle` takes one of your bundles. List them with `bundles`,
+which prints each bundle's link and title:
 
 ```
-magicdl scopes --backend itchio
+magicdl bundles --backend itchio
 # https://itch.io/b/2701/-massive-inventory-bundle-  Massive Inventory Bundle (26 games)
 # ...
 ```
 
-Then pass a bundle to `--scope` as its link, its numeric id, or a unique part of
-its title:
+Then pass a bundle as its link, its numeric id, or a unique part of its title:
 
 ```
-magicdl sync --backend itchio --scope https://itch.io/b/2701/... --out <dir>
-magicdl sync --backend itchio --scope 2701 --out <dir>
-magicdl sync --backend itchio --scope "Massive Inventory" --out <dir>
+magicdl sync --backend itchio --bundle https://itch.io/b/2701/... --out <dir>
+magicdl sync --backend itchio --bundle 2701 --out <dir>
+magicdl sync --backend itchio --bundle "Massive Inventory" --out <dir>
 ```
 
-magicdl reads the bundle's games and syncs only the items you own from it. A
-scoped `index` adds the bundle's items to the index without marking the rest of
-your library removed.
+magicdl reads the bundle's games and syncs only the items you own from it.
 
 Bundle *download* links (`https://itch.io/bundle/download/<token>`) are not
-accepted: they need a browser session rather than the API key. Use `scopes` to
+accepted: they need a browser session rather than the API key. Use `bundles` to
 get the plain bundle link instead.
 
-`--scope` is a general mechanism, so other backends can later accept their own
-references, and `scopes` can list them (a collection, a series, a favorites
-list). A backend that does not support scoping says so.
+`--creator` takes one creator. It matches the creator's itch username (the
+subdomain of a page URL), display name, or a page URL:
 
-Resolving a scope can take many paced requests (a large itch.io bundle lists
-its games, then your ownership is checked in batches), with a progress line as
-it goes. The result is cached under `<data dir>/cache` for a day and reused on
-the next run; pass `--refresh` to ignore the cache and re-fetch.
+```
+magicdl sync --backend itchio --creator willibab --out <dir>
+magicdl sync --backend itchio --creator "Willibab" --out <dir>
+magicdl sync --backend itchio --creator https://willibab.itch.io/ --out <dir>
+```
+
+List the creators already in your index, with item counts, using `creators`
+(this reads the index, so run `index` first):
+
+```
+magicdl creators --backend itchio
+# Willibab  (26 item(s))
+# ...
+```
+
+A subset `index` adds only those items to the index without marking the rest of
+your library removed. These are a general mechanism, so other backends can later
+accept their own references (a collection, a series, a favorites list). A
+backend that does not support subsets says so.
+
+Resolving a subset can take many paced requests (a bundle lists its games, then
+your ownership is checked in batches; a creator lists your owned keys and filters
+them), with a progress line as it goes. The result is cached under
+`<data dir>/cache` for a day and reused on the next run; pass `--refresh` to
+ignore the cache and re-fetch.
 
 Files land under the output directory in one folder per item. Most backends use
 a `Creator - Title` folder. itch.io instead mirrors the store's own layout,
@@ -457,8 +476,8 @@ By default the database is:
 When `$XDG_DATA_HOME` is set, it is `$XDG_DATA_HOME/magicdl/magicdl.sqlite`
 instead. The path is resolved in this order, first one wins: the `--db <path>`
 option, then the `[general] db` key in the config file, then the default above.
-The parent directory is created on first use. `--scope` results are cached
-separately under `~/.local/share/magicdl/cache/` (see Sync).
+The parent directory is created on first use. `--bundle` and `--creator` results
+are cached separately under `~/.local/share/magicdl/cache/` (see Sync).
 
 To find the exact path your setup uses, check `--db` and your config, or run a
 command with `--verbose`.

@@ -24,12 +24,20 @@ named by
 .B list\-backends
 List the available backends.
 .TP
-.B scopes
-List the scopes a backend offers for
-.BR \-\-scope ,
+.B bundles
+List the bundles a backend offers for
+.BR \-\-bundle ,
 one per line as "reference  description". For itch.io these are the account's
 owned bundles, each with a bundle link to pass to
-.BR \-\-scope .
+.BR \-\-bundle .
+.TP
+.B creators
+List the creators in the local index for a backend, one per line with how many
+items are owned from each, to pass a name to
+.BR \-\-creator .
+Reads the index only, so run
+.B index
+first.
 .TP
 .B index
 Fetch the list of owned content and store it, without downloading files.
@@ -185,29 +193,46 @@ the plain form, with no
 .BR \-\-user ,
 is the default account.
 .TP
-.BI "\-\-scope " ref
+.BI "\-\-bundle " ref
 Restrict
 .B index
 or
 .B sync
-to a subset of the collection named by
+to a single bundle named by
 .IR ref ,
-instead of the whole collection. The reference is backend specific: for itch.io
-it is one of your bundles, given as a bundle link
+instead of the whole collection. For itch.io the reference is a bundle link
 .RB ( https://itch.io/b/ \fIid\fR / \fIslug\fR ), its numeric id, or a unique part
 of its title; run
-.B scopes
+.B bundles
 to list them. Only items you own from that bundle are listed. Bundle download
 links
 .RB ( https://itch.io/bundle/download/ \fItoken\fR )
-are not accepted; they need a browser session. A scoped
+are not accepted; they need a browser session. A subset
 .B index
 does not sweep, so it will not mark the rest of your library removed. A backend
-that does not support scoping reports so. A resolved scope is cached under
+that does not support subsets reports so. A resolved subset is cached under
 .I <data dir>/cache
 for a day and reused;
 .B \-\-refresh
 ignores the cache and re\-fetches.
+.B \-\-bundle
+and
+.B \-\-creator
+cannot be combined.
+.TP
+.BI "\-\-creator " name
+Restrict
+.B index
+or
+.B sync
+to one creator's items, matched by itch username (the subdomain of a page URL),
+by display name, or by a page URL. Run
+.B creators
+to list the creators in your index. Like
+.BR \-\-bundle ,
+a subset
+.B index
+does not sweep. The same one\-day cache applies.
 .TP
 .B \-\-refresh
 Re\-resolve items that are already fully downloaded.
@@ -216,7 +241,9 @@ skips such items by default, without contacting the store, so a repeat run
 finishes quickly; pass this to re\-resolve them and pick up a store\-side
 re\-upload. A partially downloaded item is always resolved so it can be
 completed. This flag also ignores any cached
-.B \-\-scope
+.B \-\-bundle
+or
+.B \-\-creator
 result and resolves it again from the network.
 .TP
 .BI "\-\-app\-key " key
@@ -430,7 +457,9 @@ again to rebuild it; downloaded files are untouched.
 .TP
 .B ~/.local/share/magicdl/cache/
 Cached
-.B \-\-scope
+.B \-\-bundle
+and
+.B \-\-creator
 resolutions, reused for a day. Safe to delete;
 .B \-\-refresh
 also rewrites them.
@@ -465,6 +494,14 @@ Sync a Bandcamp collection as ogg:
 .RS
 .EX
 magicdl sync \-\-backend bandcamp \-\-user yourhandle \-\-firefox \-\-out ~/music \-\-format vorbis
+.EE
+.RE
+.PP
+Sync only one itch.io creator's items:
+.PP
+.RS
+.EX
+magicdl sync \-\-backend itchio \-\-creator willibab \-\-out ~/itch
 .EE
 .RE
 .SH RATE LIMITING

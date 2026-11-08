@@ -16,15 +16,20 @@ unit mdbackend_itchio;
   id is the composite "<downloadKeyId>:<gameId>". That lets sync resolve an item
   from the index alone, without a listing.
 
-  Scope support (--scope) accepts an itch.io bundle link, a bundle id, or a
-  bundle title, and syncs only that bundle's items.
+  Subset support narrows index/sync to part of the collection. The reference is
+  a typed string "<kind>:<value>", built by the CLI from --bundle or --creator:
+
+    bundle:<link|id|title>   one of the account's bundles
+    creator:<name|user|url>  everything owned from one creator
 
     GET  /profile/owned-bundles              -> the account's bundles (for list)
     GET  /bundles/<id>/bundle-games?page=N   -> the bundle's games (with ids)
 
-  The bundle's game ids are intersected with the owned keys (owned-keys accepts
-  a game_ids filter), so only items the user actually owns are returned. The
-  `scopes` command lists owned bundles so the user can find a link or id.
+  A bundle's game ids are intersected with the owned keys (owned-keys accepts a
+  game_ids filter), so only items the user actually owns are returned. A creator
+  subset filters the owned keys by the creator's itch username (the subdomain of
+  each item's page URL) or display name. The `bundles` command lists owned
+  bundles; the `creators` command lists creators from the index.
 
   PUBLIC DOMAIN (CC0-1.0) }
 
@@ -47,6 +52,11 @@ type
     function FetchBundleGameIds(const bundleId: string): TStringArray;
     {** The account's owned bundles, from /profile/owned-bundles. }
     function FetchOwnedBundles: TScopeInfoArray;
+    {** The owned items from one creator, matched by itch username or display
+      name. creatorRef is a name, username, host, or page URL. }
+    function ResolveCreatorScope(const creatorRef: string): TCollectionItemArray;
+    {** The bundle subset for a bundle reference (link, id, or title). }
+    function ResolveBundleScope(const scopeRef: string): TCollectionItemArray;
   public
     class function BackendName: string; override;
     class function CookieHost: string; override;
@@ -396,7 +406,7 @@ begin
   ListScopes := FetchOwnedBundles;
 end;
 
-function TItchIoBackend.ListScope(
+function TItchIoBackend.ResolveBundleScope(
   const scopeRef: string): TCollectionItemArray;
 const
   CHUNK = 50;  { owned-keys game_ids accepts at most 50 per request }
@@ -416,8 +426,8 @@ begin
     if Pos('/bundle/download/', low) > 0 then
       raise EMagicError.Create(
         'itch.io bundle download links are not supported: they need a browser ' +
-        'session, not the API key. Run "magicdl scopes --backend itchio" to ' +
-        'list your bundles, then pass a bundle link or its id to --scope.');
+        'session, not the API key. Run "magicdl bundles --backend itchio" to ' +
+        'list your bundles, then pass a bundle link or its id to --bundle.');
     { Not a link or id: match the reference against owned bundle titles. }
     bundles := FetchOwnedBundles;
     nmatch := 0;
@@ -429,7 +439,7 @@ begin
       end;
     if nmatch = 0 then
       raise EMagicError.CreateFmt(
-        'No owned itch.io bundle matches "%s". Run "magicdl scopes ' +
+        'No owned itch.io bundle matches "%s". Run "magicdl bundles ' +
         '--backend itchio" to see them.', [scopeRef]);
     if nmatch > 1 then
       raise EMagicError.CreateFmt(
@@ -484,6 +494,87 @@ begin
   finally
     seen.Free;
   end;
+end;
+
+{** The itch username (the subdomain of a "<user>.itch.io" page URL), lowercased,
+  or '' when the URL is not an itch.io subdomain. A creator's own domain cannot
+  be recovered here, so such items match only by display name. }
+function ItchUserFromUrl(const url: string): string;
+const
+  SUFFIX = '.itch.io';
+var
+  u: string;
+  p: LongInt;
+begin
+  Result := '';
+  u := LowerCase(Trim(url));
+  p := Pos('://', u);
+  if p > 0 then
+    u := Copy(u, p + 3, MaxInt);
+  { Keep the host only. }
+  p := Pos('/', u);
+  if p > 0 then
+    u := Copy(u, 1, p - 1);
+  if (Length(u) > Length(SUFFIX))
+    and (Copy(u, Length(u) - Length(SUFFIX) + 1, Length(SUFFIX)) = SUFFIX) then
+    Result := Copy(u, 1, Length(u) - Length(SUFFIX));
+end;
+
+{** Filters the owned keys to the items from one creator. The reference matches
+  an item when its itch username equals the reference (whether the reference is a
+  bare username, a host, or a page URL) or its display name equals the reference,
+  case-insensitively. }
+function TItchIoBackend.ResolveCreatorScope(
+  const creatorRef: string): TCollectionItemArray;
+var
+  all: TCollectionItemArray;
+  refUser, rawLow, uname, dname: string;
+  i, n: LongInt;
+begin
+  Result := nil;
+  rawLow := LowerCase(Trim(creatorRef));
+  refUser := ItchUserFromUrl(creatorRef);  { non-empty only for a host or URL }
+  if rawLow = '' then
+    raise EMagicError.Create('Empty creator reference.');
+
+  fCtx.log.Info('Listing owned items to match the creator...');
+  all := FetchOwnedKeys('');
+  for i := 0 to High(all) do begin
+    uname := ItchUserFromUrl(all[i].pageUrl);
+    dname := LowerCase(all[i].artist);
+    if ((uname <> '') and ((uname = refUser) or (uname = rawLow)))
+      or (dname = rawLow) then begin
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n] := all[i];
+    end;
+  end;
+
+  if Length(Result) = 0 then
+    raise EMagicError.CreateFmt(
+      'No owned itch.io items from creator "%s". Run "magicdl creators ' +
+      '--backend itchio" to see the creators you own.', [creatorRef]);
+  fCtx.log.Info(Format('Creator "%s": %d owned item(s).',
+    [creatorRef, Length(Result)]));
+end;
+
+{** Dispatches a typed subset reference ("bundle:<ref>" or "creator:<ref>") built
+  by the CLI from --bundle or --creator. An unprefixed reference is treated as a
+  bundle. }
+function TItchIoBackend.ListScope(
+  const scopeRef: string): TCollectionItemArray;
+const
+  BUNDLE_PREFIX = 'bundle:';
+  CREATOR_PREFIX = 'creator:';
+begin
+  if Copy(scopeRef, 1, Length(CREATOR_PREFIX)) = CREATOR_PREFIX then
+    Result := ResolveCreatorScope(
+      Copy(scopeRef, Length(CREATOR_PREFIX) + 1, MaxInt))
+  else if Copy(scopeRef, 1, Length(BUNDLE_PREFIX)) = BUNDLE_PREFIX then
+    Result := ResolveBundleScope(
+      Copy(scopeRef, Length(BUNDLE_PREFIX) + 1, MaxInt))
+  else
+    Result := ResolveBundleScope(scopeRef);
 end;
 
 function TItchIoBackend.ResolveCoverUrl(const item: TCollectionItem): string;
