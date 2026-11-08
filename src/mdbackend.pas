@@ -28,6 +28,7 @@ type
     formats: TStringArray; { desired formats; empty means all (multi-file filter) }
     skipHidden: boolean;
     dryRun: boolean;
+    refresh: boolean;      { re-resolve items already fully downloaded }
   end;
 
   {** One scope a backend can offer to --scope: a reference to pass and a human

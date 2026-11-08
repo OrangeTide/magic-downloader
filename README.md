@@ -236,6 +236,13 @@ magicdl sync --backend drivethrurpg --app-key-file .appkey-dtrpg --from-index --
    list filters such as `--not-downloaded` to fetch only what you are missing.
    This is the fast path for a large library you have already indexed.
 
+By default `sync` skips any item it already downloaded in full, without
+contacting the store, so a repeat run over a complete library finishes in
+seconds rather than making a paced request per item. A partially downloaded
+item is still resolved and completed. Pass `--refresh` to re-resolve held items
+and pick up a store-side re-upload; `check` reports such updates without
+downloading.
+
 `--scope` narrows either `index` or `sync` to a subset of the collection. For
 itch.io a scope is one of your bundles. List them with `scopes`, which prints
 each bundle's link and title:

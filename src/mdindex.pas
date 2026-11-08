@@ -153,6 +153,11 @@ type
     function HasPresentFile(const backend, backendId, versionKey,
       name: string): boolean;
 
+    {** True when the item has at least one recorded file and none are missing,
+      so it was fully downloaded on a previous run. A partially fetched item
+      (any missing file) returns False so sync re-resolves and completes it. }
+    function ItemFullyPresent(const backend, backendId: string): boolean;
+
     {** Records a downloaded file (name is its identity within the version,
       format is the type hint). }
     procedure RecordFile(const backend, backendId, versionKey, name, format,
@@ -615,6 +620,34 @@ begin
     q.Open;
     HasPresentFile := not q.EOF;
     q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.ItemFullyPresent(const backend, backendId: string): boolean;
+var
+  q: TSQLQuery;
+  total, present: LongInt;
+begin
+  q := NewQuery;
+  try
+    { COUNT(CASE ...) is always an integer (0 over no rows), unlike SUM, which
+      is NULL for an item with no files and cannot be read as an integer. }
+    q.SQL.Text :=
+      'SELECT COUNT(*) AS total, ' +
+      '  COUNT(CASE WHEN f.state=''present'' THEN 1 END) AS present ' +
+      'FROM files f ' +
+      'JOIN versions v ON f.version_id=v.id ' +
+      'JOIN items i ON v.item_id=i.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    total := q.FieldByName('total').AsInteger;
+    present := q.FieldByName('present').AsInteger;
+    q.Close;
+    ItemFullyPresent := (total > 0) and (present = total);
   finally
     q.Free;
   end;

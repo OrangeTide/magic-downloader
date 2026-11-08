@@ -204,9 +204,14 @@ for a day and reused;
 ignores the cache and re\-fetches.
 .TP
 .B \-\-refresh
-Ignore any cached
+Re\-resolve items that are already fully downloaded.
+.B sync
+skips such items by default, without contacting the store, so a repeat run
+finishes quickly; pass this to re\-resolve them and pick up a store\-side
+re\-upload. A partially downloaded item is always resolved so it can be
+completed. This flag also ignores any cached
 .B \-\-scope
-result and resolve it again from the network.
+result and resolves it again from the network.
 .TP
 .BI "\-\-app\-key " key
 Application or API key (DriveThruRPG, itch.io). Exposes the key in the process

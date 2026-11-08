@@ -135,7 +135,8 @@ begin
   Writeln('                             which keyring account to use (see key)');
   Writeln('  --scope <ref>              Index/sync only a subset (itchio: a bundle');
   Writeln('                             link, id, or title; see the scopes command)');
-  Writeln('  --refresh                  Ignore the cached --scope result and re-fetch');
+  Writeln('  --refresh                  Re-resolve items already downloaded (sync skips');
+  Writeln('                             them by default), and ignore the cached --scope result');
   Writeln('  --app-key <key>            Application key (drivethrurpg); prefer the keyring');
   Writeln('  --app-key-file <path>      Read the application key from a file (not the CLI)');
   Writeln('  --cookies <path>           Cookies file (SQLite, Cookie Quick');
@@ -309,6 +310,7 @@ begin
     Result.audioFormat := 'flac';
   Result.skipHidden := HasFlag('--skip-hidden');
   Result.dryRun := HasFlag('--dry-run');
+  Result.refresh := HasFlag('--refresh');
 end;
 
 { ---- Commands ---- }
@@ -921,6 +923,17 @@ begin
 
   if ctx.index.IsImported(backendName, item.id) then begin
     gLog.Debug(Format('  skip imported "%s" (already owned locally)', [item.id]));
+    exit;
+  end;
+
+  { Already fully downloaded on a previous run: skip before the per-item network
+    resolve, so a repeat sync does not re-contact the store for every held item.
+    --refresh forces the resolve to pick up a store-side re-upload; check
+    reports such updates without downloading. A partially fetched item is not
+    fully present, so it still resolves and completes here. }
+  if (not ctx.refresh) and ctx.index.ItemFullyPresent(backendName, item.id) then begin
+    gLog.Debug(Format('  skip present "%s" (fully downloaded; --refresh to re-check)',
+      [item.id]));
     exit;
   end;
 
