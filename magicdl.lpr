@@ -851,6 +851,26 @@ end;
   product's files) into one folder, plus its cover when --covers is set. Records
   the version and each file in the index. Honors --dry-run. Returns true when
   something was fetched (or would have been, under dry-run). }
+{** Reports whether a file begins with a ZIP signature: a local file header
+  (PK\x03\x04) or an empty archive (PK\x05\x06). A bandcamp album download is a
+  zip, but a single-track purchase is the bare audio file, so a download flagged
+  for extraction must be checked before it is treated as an archive. }
+function IsZipArchive(const path: string): boolean;
+var
+  fs: TFileStream;
+  sig: array[0..3] of Byte;
+begin
+  IsZipArchive := false;
+  fs := TFileStream.Create(path, fmOpenRead or fmShareDenyNone);
+  try
+    if fs.Read(sig, 4) = 4 then
+      IsZipArchive := (sig[0] = $50) and (sig[1] = $4B)
+        and (sig[2] in [$03, $05]) and (sig[3] in [$04, $06]);
+  finally
+    fs.Free;
+  end;
+end;
+
 {** Unpacks a downloaded archive into destDir and returns the total uncompressed
   size of its entries. The archive's own paths are kept, so a bandcamp album zip
   of flat tracks lands as tracks directly in the album folder. }
@@ -959,11 +979,20 @@ begin
     savedPath := ctx.http.Download(targets[i].downloadUrl, itemDir, fileName,
       pcNormal);
 
-    if targets[i].extract then begin
+    if targets[i].extract and IsZipArchive(savedPath) then begin
       { Unpack the archive in place and drop it, so the folder holds the tracks
         rather than a zip. The item's presence is recorded against the folder,
-        since the archive it was fetched as no longer exists to hash. }
-      fileSize := ExtractArchive(savedPath, itemDir);
+        since the archive it was fetched as no longer exists to hash. A bad
+        archive is not fatal: leave it and let a later run retry the item. }
+      try
+        fileSize := ExtractArchive(savedPath, itemDir);
+      except
+        on e: Exception do begin
+          gLog.Info(Format('  could not unpack "%s": %s',
+            [targets[i].suggestedName, e.Message]));
+          continue;
+        end;
+      end;
       DeleteFile(savedPath);
       ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
         targets[i].name, targets[i].format, itemDir, fileSize, '', seen);
