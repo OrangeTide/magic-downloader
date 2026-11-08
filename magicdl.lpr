@@ -418,6 +418,42 @@ begin
   end;
 end;
 
+{** Reduces a name to a loose match key: lower-case, ASCII letters and digits
+  only, everything else dropped. Two stores sanitize punctuation and Unicode
+  differently (one writes a fullwidth slash, another a space; curly versus
+  straight quotes), so comparing sanitized names misses real matches. Folding
+  both sides to this canonical form lets import pair a folder with its item
+  despite those differences. It is deliberately lossy, so it is only a fallback
+  after an exact name match fails. }
+function CanonName(const s: string): string;
+var
+  i: LongInt;
+  c: Char;
+begin
+  CanonName := '';
+  for i := 1 to Length(s) do begin
+    c := s[i];
+    if (c >= 'A') and (c <= 'Z') then
+      CanonName := CanonName + Chr(Ord(c) + 32)
+    else if ((c >= 'a') and (c <= 'z')) or ((c >= '0') and (c <= '9')) then
+      CanonName := CanonName + c;
+  end;
+end;
+
+{** Drops a leading "<artist> - " from an album folder name. Some libraries
+  prefix the album folder with the band name (e.g. "Mega Drive - 198XAD" under
+  the "Mega Drive" artist folder), which the store's own title does not carry. }
+function StripArtistPrefix(const title, artist: string): string;
+var
+  prefix: string;
+begin
+  StripArtistPrefix := title;
+  prefix := artist + ' - ';
+  if (artist <> '') and (Length(title) > Length(prefix))
+    and (CompareText(Copy(title, 1, Length(prefix)), prefix) = 0) then
+    StripArtistPrefix := Copy(title, Length(prefix) + 1, Length(title));
+end;
+
 {** Lists the collection and folds it into the index: upserts every item under a
   single run timestamp, then sweeps anything not seen this run to removed. }
 procedure IndexCollection(backend: TMagicBackend; index: TMagicIndex;
@@ -2349,7 +2385,7 @@ var
   args: TStringArray;
   index: TMagicIndex;
   items: TIndexedItemArray;
-  keys: TStringList;
+  keys, ckeys: TStringList;
   f: TItemFilter;
   citem: TCollectionItem;
   artistRec, albumRec: TSearchRec;
@@ -2371,6 +2407,7 @@ begin
 
   index := TMagicIndex.Create(ResolveDbPath);
   keys := TStringList.Create;
+  ckeys := TStringList.Create;
   ctx := Default(TMagicContext);
   ctx.log := gLog;
   ctx.index := index;
@@ -2414,10 +2451,16 @@ begin
       { Name walk: Artist folders, then album folders, keyed by creator/title. }
       keys.Sorted := true;
       keys.Duplicates := dupIgnore;
-      for i := 0 to High(items) do
+      ckeys.Sorted := true;
+      ckeys.Duplicates := dupIgnore;
+      for i := 0 to High(items) do begin
         keys.AddObject(
           SanitizeName(items[i].creator) + '/' + SanitizeName(items[i].title),
           TObject(PtrInt(i)));
+        ckeys.AddObject(
+          CanonName(items[i].creator) + '/' + CanonName(items[i].title),
+          TObject(PtrInt(i)));
+      end;
 
       if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faDirectory,
         artistRec) = 0 then
@@ -2439,6 +2482,12 @@ begin
               idx := keys.IndexOf(key);
               if idx < 0 then  { try the folder name unstripped }
                 idx := keys.IndexOf(artistRec.Name + '/' + albumRec.Name);
+              if idx < 0 then  { loose match: fold punctuation and case away }
+                idx := ckeys.IndexOf(CanonName(artistRec.Name) + '/'
+                  + CanonName(albumTitle));
+              if idx < 0 then  { loose match without the repeated artist prefix }
+                idx := ckeys.IndexOf(CanonName(artistRec.Name) + '/'
+                  + CanonName(StripArtistPrefix(albumTitle, artistRec.Name)));
               if idx >= 0 then begin
                 i := PtrInt(keys.Objects[idx]);
                 Inc(matched);
@@ -2475,6 +2524,7 @@ begin
   finally
     backend.Free;
     keys.Free;
+    ckeys.Free;
     index.Free;
   end;
 end;
