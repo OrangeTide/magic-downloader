@@ -13,7 +13,7 @@ uses
   {$IFDEF UNIX}cwstring, termio,{$ENDIF}  { cwstring: UTF-8 default codepage
     from the locale, so Unicode paths are stored and read unchanged (no
     single-byte transcode). termio: turn off echo while reading a key. }
-  Classes, SysUtils, contnrs, fpjson, DateUtils,
+  Classes, SysUtils, contnrs, fpjson, DateUtils, zipper,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
   mdconfig, mdkeyring,
   mdbackend_bandcamp,      { registers the bandcamp backend }
@@ -851,6 +851,28 @@ end;
   product's files) into one folder, plus its cover when --covers is set. Records
   the version and each file in the index. Honors --dry-run. Returns true when
   something was fetched (or would have been, under dry-run). }
+{** Unpacks a downloaded archive into destDir and returns the total uncompressed
+  size of its entries. The archive's own paths are kept, so a bandcamp album zip
+  of flat tracks lands as tracks directly in the album folder. }
+function ExtractArchive(const archivePath, destDir: string): Int64;
+var
+  uz: TUnZipper;
+  i: LongInt;
+begin
+  Result := 0;
+  uz := TUnZipper.Create;
+  try
+    uz.FileName := archivePath;
+    uz.OutputPath := destDir;
+    uz.Examine;
+    for i := 0 to uz.Entries.Count - 1 do
+      Result := Result + uz.Entries[i].Size;
+    uz.UnZipAllFiles;
+  finally
+    uz.Free;
+  end;
+end;
+
 function SyncItem(backend: TMagicBackend; const ctx: TMagicContext;
   const backendName: string; const item: TCollectionItem;
   withCovers: boolean): boolean;
@@ -911,6 +933,7 @@ begin
   named := item;
   if targets[0].artist <> '' then named.artist := targets[0].artist;
   if targets[0].title <> '' then named.title := targets[0].title;
+  if targets[0].releasedAt <> '' then named.releaseDate := targets[0].releasedAt;
   ctx.index.UpsertItem(backendName, named, seen);
   ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
     targets[0].releasedAt, seen);
@@ -936,16 +959,26 @@ begin
     savedPath := ctx.http.Download(targets[i].downloadUrl, itemDir, fileName,
       pcNormal);
 
-    sha := Sha256File(savedPath);
-    fs := TFileStream.Create(savedPath, fmOpenRead or fmShareDenyNone);
-    try
-      fileSize := fs.Size;
-    finally
-      fs.Free;
+    if targets[i].extract then begin
+      { Unpack the archive in place and drop it, so the folder holds the tracks
+        rather than a zip. The item's presence is recorded against the folder,
+        since the archive it was fetched as no longer exists to hash. }
+      fileSize := ExtractArchive(savedPath, itemDir);
+      DeleteFile(savedPath);
+      ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
+        targets[i].name, targets[i].format, itemDir, fileSize, '', seen);
+    end
+    else begin
+      sha := Sha256File(savedPath);
+      fs := TFileStream.Create(savedPath, fmOpenRead or fmShareDenyNone);
+      try
+        fileSize := fs.Size;
+      finally
+        fs.Free;
+      end;
+      ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
+        targets[i].name, targets[i].format, savedPath, fileSize, sha, seen);
     end;
-
-    ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
-      targets[i].name, targets[i].format, savedPath, fileSize, sha, seen);
     fetchedAny := true;
   end;
 

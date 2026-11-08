@@ -54,6 +54,7 @@ type
     class function CookieHost: string; override;
     procedure Authenticate; override;
     function ListCollection: TCollectionItemArray; override;
+    function ItemSubdir(const item: TCollectionItem): string; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; override;
@@ -593,6 +594,45 @@ begin
   end;
 end;
 
+{** Returns the four-digit year from a free-form date, the first run of four
+  digits that begins 19 or 20. Bandcamp's package_release_date reads like
+  "08 Jan 2021 00:00:00 GMT". Returns '' when no such year is present. }
+function YearFromDate(const s: string): string;
+var
+  i: LongInt;
+begin
+  YearFromDate := '';
+  for i := 1 to Length(s) - 3 do
+    if (((s[i] = '1') and (s[i + 1] = '9'))
+        or ((s[i] = '2') and (s[i + 1] = '0')))
+      and (s[i + 2] in ['0'..'9']) and (s[i + 3] in ['0'..'9']) then begin
+      YearFromDate := Copy(s, i, 4);
+      exit;
+    end;
+end;
+
+{** Lays an album out as <artist>/<year> - <title>, matching the reference
+  tool's library so a sync lands beside what it already downloaded. The year
+  comes from the item's release date; without one, the year prefix is dropped,
+  and without an artist the caller falls back to its default name. Each segment
+  is sanitized by the caller (SanitizeSubdir). }
+function TBandcampBackend.ItemSubdir(const item: TCollectionItem): string;
+var
+  year: string;
+begin
+  if item.artist = '' then begin
+    ItemSubdir := '';
+    exit;
+  end;
+  year := YearFromDate(item.releaseDate);
+  if (year <> '') and (item.title <> '') then
+    ItemSubdir := item.artist + '/' + year + ' - ' + item.title
+  else if item.title <> '' then
+    ItemSubdir := item.artist + '/' + item.title
+  else
+    ItemSubdir := item.artist;
+end;
+
 function TBandcampBackend.ResolveCoverUrl(const item: TCollectionItem): string;
 var
   digital: TJSONObject;
@@ -631,6 +671,7 @@ begin
   target.itemId := item.id;
   target.format := fCtx.audioFormat;
   target.name := fCtx.audioFormat;  { one file per item, keyed by its format }
+  target.extract := true;  { bandcamp hands back a zip of the album's tracks }
 
   { package_release_date is the version signal: a re-upload changes it. It also
     dates the release, so a preorder carries a future one. }

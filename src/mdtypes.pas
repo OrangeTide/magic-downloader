@@ -68,6 +68,8 @@ type
     hash: string;        { expected content hash of the file, when the store
                            reports one (used by `check`); empty if unknown }
     hashAlgo: string;    { the hash algorithm: 'md5', 'sha256', or '' }
+    extract: boolean;    { the download is an archive to unpack in place, then
+                           remove (bandcamp albums arrive as a zip of tracks) }
   end;
   TDownloadTargetArray = array of TDownloadTarget;
 
