@@ -1165,7 +1165,27 @@ var
   localPaths, localHashes, localAlgos: TStringArray;
   i, j, k, nameIdx, matched, mismatched, missing: LongInt;
   rec: TSearchRec;
-  found, fbFound: boolean;
+  found, fbFound, hasExtractedDir: boolean;
+
+  { True when dir exists and holds at least one regular file. Used to recognise
+    an extracted archive, whose recorded "file" is the album directory. }
+  function DirHasFiles(const dir: string): boolean;
+  var
+    sr: TSearchRec;
+  begin
+    DirHasFiles := false;
+    if FindFirst(IncludeTrailingPathDelimiter(dir) + '*', faAnyFile, sr) = 0 then
+    try
+      repeat
+        if (sr.Attr and faDirectory) = 0 then begin
+          DirHasFiles := true;
+          break;
+        end;
+      until FindNext(sr) <> 0;
+    finally
+      FindClose(sr);
+    end;
+  end;
 
   { Hashes local file k with algorithm a, caching the result (and a sentinel
     '?' on failure) so each local file is hashed at most once per algorithm. }
@@ -1203,10 +1223,18 @@ begin
   { Collect every local file that could satisfy a current upload: recorded
     present files, and the files directly inside an adopted item's folder. }
   SetLength(localPaths, 0);
+  hasExtractedDir := false;
   for j := 0 to High(files) do
-    if (files[j].state = 'present') and FileExists(files[j].path) then begin
-      SetLength(localPaths, Length(localPaths) + 1);
-      localPaths[High(localPaths)] := files[j].path;
+    if files[j].state = 'present' then begin
+      if FileExists(files[j].path) then begin
+        SetLength(localPaths, Length(localPaths) + 1);
+        localPaths[High(localPaths)] := files[j].path;
+      end
+      { An extracted archive is recorded as the album directory, not a file. We
+        cannot hash loose tracks back into the store's zip, so presence of that
+        non-empty directory is the most the hash check can confirm. }
+      else if DirectoryExists(files[j].path) and DirHasFiles(files[j].path) then
+        hasExtractedDir := true;
     end;
   if (importedPath <> '') and (FindFirst(
     IncludeTrailingPathDelimiter(importedPath) + '*', faAnyFile, rec) = 0) then
@@ -1236,6 +1264,18 @@ begin
   mismatched := 0;
   missing := 0;
   for i := 0 to High(targets) do begin
+    { An archive we extract on download leaves loose tracks, not the zip, so its
+      hash cannot be matched, and the store offers no file hash to match against.
+      Such a target is one logical download per item, so presence is all the
+      check can confirm: the extracted album directory, or (a single-track
+      purchase, saved as a bare file) any recorded file still on disk. }
+    if targets[i].extract then begin
+      if hasExtractedDir or (Length(localPaths) > 0) then
+        Inc(matched)
+      else
+        Inc(missing);
+      continue;
+    end;
     algo := targets[i].hashAlgo;
     { Prefer a local file of the same name as the upload, so a same-name file
       with different content is still reported outdated. }
