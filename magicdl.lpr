@@ -677,6 +677,21 @@ begin
       'Backend "%s" does not support --bundle or --creator.', [backendName]);
 end;
 
+{** A human label for a typed subset reference for the banner: 'creator:willibab'
+  reads as 'creator "willibab"'. The kind is split at the first colon, so a URL
+  value keeps its own colons. }
+function SubsetLabel(const scopeRef: string): string;
+var
+  p: LongInt;
+begin
+  p := Pos(':', scopeRef);
+  if p > 0 then
+    SubsetLabel := Format('%s "%s"',
+      [Copy(scopeRef, 1, p - 1), Copy(scopeRef, p + 1, MaxInt)])
+  else
+    SubsetLabel := Format('"%s"', [scopeRef]);
+end;
+
 {** A ' for "<account>"' clause for a banner line, or '' when the backend has no
   account name to show. Call after Authenticate so a backend that learns its
   account only then (itch.io, from the profile) can report it. }
@@ -793,7 +808,7 @@ begin
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
       if scope <> '' then begin
-        gLog.Info(Format('Indexing %s subset "%s"...', [backendName, scope]));
+        gLog.Info(Format('Indexing %s %s...', [backendName, SubsetLabel(scope)]));
         IndexScope(backend, s.index, backendName, scope, items);
       end
       else begin
@@ -1174,7 +1189,7 @@ begin
         { Subset sync: list only the subset (a bundle or creator), index it
           without sweeping, and download those items. }
         IndexScope(backend, s.index, backendName, scope, items);
-        gLog.Info(Format('%d item(s) in subset.', [Length(items)]));
+        gLog.Info(Format('%d item(s) in %s.', [Length(items), SubsetLabel(scope)]));
         for i := 0 to High(items) do begin
           SyncProgress(i, Length(items), items[i]);
           if SyncItem(backend, ctx, backendName, items[i], withCovers) then
