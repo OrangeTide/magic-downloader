@@ -197,6 +197,79 @@ begin
   FilenameFromDisposition := ExtractFileName(s);
 end;
 
+{** Masks the values of sensitive query parameters (keys, tokens, signatures) in
+  a URL, so a URL that carries a credential can appear in a log or error without
+  leaking it. A download URL for some backends embeds the API key this way. }
+function RedactUrl(const url: string): string;
+
+  function IsSecret(const key: string): boolean;
+  var
+    k: string;
+  begin
+    k := LowerCase(key);
+    IsSecret := (k = 'api_key') or (k = 'apikey') or (k = 'access_token')
+      or (k = 'token') or (k = 'sig') or (k = 'password') or (k = 'auth')
+      or (k = 'key');
+  end;
+
+var
+  qpos, start, amp, eq: LongInt;
+  head, query, pair, name, res: string;
+begin
+  qpos := Pos('?', url);
+  if qpos = 0 then begin
+    RedactUrl := url;
+    exit;
+  end;
+  head := Copy(url, 1, qpos);  { up to and including '?' }
+  query := Copy(url, qpos + 1, Length(url));
+  res := '';
+  start := 1;
+  while start <= Length(query) do begin
+    amp := start;
+    while (amp <= Length(query)) and (query[amp] <> '&') do
+      Inc(amp);
+    pair := Copy(query, start, amp - start);
+    eq := Pos('=', pair);
+    if eq > 0 then begin
+      name := Copy(pair, 1, eq - 1);
+      if IsSecret(name) then
+        pair := Copy(pair, 1, eq) + '***';
+    end;
+    if res <> '' then
+      res := res + '&';
+    res := res + pair;
+    start := amp + 1;
+  end;
+  RedactUrl := head + res;
+end;
+
+{** A short next step for a terminal (non-retryable) HTTP status, so the error
+  tells the user what to try rather than only that it failed. }
+function TerminalStatusAdvice(statusCode: LongInt): string;
+begin
+  case statusCode of
+    400:
+      TerminalStatusAdvice := 'The server rejected the request. A stored ' +
+        'download link may be stale; re-run index to refresh it.';
+    401:
+      TerminalStatusAdvice := 'Authentication failed. The key or cookies are ' +
+        'missing or expired; set valid credentials and try again.';
+    403:
+      TerminalStatusAdvice := 'Access was denied. The credentials may be ' +
+        'expired or may not cover this item. Check that the key or cookies ' +
+        'are current and that the account owns it, then re-run index to ' +
+        'refresh its data.';
+    404:
+      TerminalStatusAdvice := 'The item or file was not found. It may have ' +
+        'moved or been removed from the store; re-run index to refresh.';
+    410:
+      TerminalStatusAdvice := 'The store reports this item or file is gone.';
+  else
+    TerminalStatusAdvice := 'Retrying will not help.';
+  end;
+end;
+
 function TMagicHttp.DoOnceToStream(const method, url, requestBody: string;
   respStream: TStream; sendAuth: boolean; out contentDisposition: string): LongInt;
 var
@@ -256,15 +329,15 @@ begin
         sendAuth, contentDisposition);
       if statusCode >= 400 then
         raise EMagicHttpError.Create(
-          Format('HTTP %d for %s', [statusCode, url]), statusCode);
+          Format('HTTP %d for %s', [statusCode, RedactUrl(url)]), statusCode);
       fPacer.NoteSuccess;
       exit;
     except
       on e: EMagicHttpError do begin
         fLog.Debug(Format('Request failed: %s', [e.Message]));
         if IsTerminalStatus(e.StatusCode) then
-          raise EMagicError.CreateFmt(
-            'Request refused with HTTP %d; retrying would not help.', [e.StatusCode]);
+          raise EMagicError.CreateFmt('Request refused with HTTP %d. %s',
+            [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]);
         if attempt = attempts then
           break;
         if e.StatusCode = HTTP_TOO_MANY_REQUESTS then
