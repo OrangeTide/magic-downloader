@@ -342,6 +342,21 @@ type
 {** Reads item_cache.collection and item_cache.hidden into cache, tagging the
   hidden ones. band_name maps to artist and item_title to title. Absent sections
   are treated as empty. }
+{** Reads a field as a string whatever its JSON type. TJSONObject.Get with a
+  string default only returns string-typed fields (it filters on jtString), so
+  it yields '' for a numeric field like sale_item_id. This returns the value's
+  AsString for any non-null type, and '' when the field is absent or null. }
+function JsonStr(obj: TJSONObject; const name: string): string;
+var
+  d: TJSONData;
+begin
+  d := obj.Find(name);
+  if (d <> nil) and (d.JSONType <> jtNull) then
+    JsonStr := d.AsString
+  else
+    JsonStr := '';
+end;
+
 procedure CollectCachedItems(blob: TJSONObject; out cache: TCachedItemArray);
 var
   itemCache: TJSONObject;
@@ -358,14 +373,14 @@ var
     for i := 0 to section.Count - 1 do
       if section.Items[i] is TJSONObject then begin
         entry := TJSONObject(section.Items[i]);
-        saleId := entry.Get('sale_item_id', '');
+        saleId := JsonStr(entry, 'sale_item_id');
         if saleId = '' then
           continue;
         n := Length(cache);
         SetLength(cache, n + 1);
         cache[n].saleId := saleId;
-        cache[n].artist := entry.Get('band_name', '');
-        cache[n].title := entry.Get('item_title', '');
+        cache[n].artist := JsonStr(entry, 'band_name');
+        cache[n].title := JsonStr(entry, 'item_title');
         cache[n].hidden := hidden;
       end;
   end;
@@ -379,20 +394,63 @@ begin
   AddSection('hidden', true);
 end;
 
-{** Finds the cached item whose sale_item_id appears in the download URL. The
-  redownload_urls key is not always the sale_item_id, so the reference matches
-  against the URL text, which does contain it. Returns false when none matches. }
-function FindCachedByUrl(const url: string; const cache: TCachedItemArray;
+{** A redownload_urls key is a one-letter type tag followed by the sale_item_id,
+  for example "p403997910" or "c1179762346". This returns the sale_item_id, the
+  digits after the leading non-digit tag. The URL itself carries only a
+  payment_id, so the key, not the URL, is what ties an entry to its item_cache. }
+function SaleIdFromKey(const key: string): string;
+var
+  i: LongInt;
+begin
+  i := 1;
+  while (i <= Length(key)) and not (key[i] in ['0'..'9']) do
+    Inc(i);
+  SaleIdFromKey := Copy(key, i, Length(key));
+end;
+
+{** Finds the cached item with this sale_item_id. Returns false when none has it
+  (a preorder or other entry with no sale leaves the item without a name). }
+function FindCachedBySaleId(const saleId: string; const cache: TCachedItemArray;
   out idx: LongInt): boolean;
 var
   i: LongInt;
 begin
-  FindCachedByUrl := false;
+  FindCachedBySaleId := false;
+  if saleId = '' then
+    exit;
   for i := 0 to High(cache) do
-    if Pos(cache[i].saleId, url) > 0 then begin
+    if cache[i].saleId = saleId then begin
       idx := i;
-      FindCachedByUrl := true;
+      FindCachedBySaleId := true;
       exit;
+    end;
+end;
+
+{** Builds the sale_item_id -> artist/title cache from a fancollection API
+  response's "items" array. Each entry carries band_name and item_title, the
+  same fields the embedded page's item_cache uses. The hidden flag is set by the
+  caller, since the endpoint already selects hidden or non-hidden. }
+function CacheFromItemsArray(items: TJSONData): TCachedItemArray;
+var
+  i, n: LongInt;
+  entry: TJSONObject;
+  saleId: string;
+begin
+  Result := nil;
+  if (items = nil) or not (items is TJSONArray) then
+    exit;
+  for i := 0 to items.Count - 1 do
+    if items.Items[i] is TJSONObject then begin
+      entry := TJSONObject(items.Items[i]);
+      saleId := JsonStr(entry, 'sale_item_id');
+      if saleId = '' then
+        continue;
+      n := Length(Result);
+      SetLength(Result, n + 1);
+      Result[n].saleId := saleId;
+      Result[n].artist := JsonStr(entry, 'band_name');
+      Result[n].title := JsonStr(entry, 'item_title');
+      Result[n].hidden := false;
     end;
 end;
 
@@ -404,7 +462,8 @@ var
   respText, body: string;
   resp, urls: TJSONObject;
   data: TJSONData;
-  i, n: LongInt;
+  pageCache: TCachedItemArray;
+  i, n, ci: LongInt;
   it: TCollectionItem;
 begin
   lastToken := firstToken;
@@ -418,12 +477,21 @@ begin
     try
       resp := data as TJSONObject;
       urls := resp.Get('redownload_urls', TJSONObject(nil));
+      { The response's items array carries each entry's band_name/item_title,
+        tied to its redownload_urls entry by sale_item_id. Without this the paged
+        items have no artist or title. }
+      pageCache := CacheFromItemsArray(resp.Find('items'));
       if urls <> nil then
         for i := 0 to urls.Count - 1 do begin
           it := Default(TCollectionItem);
           it.id := urls.Names[i];
           it.pageUrl := urls.Items[i].AsString;
           it.hidden := hidden;
+          if FindCachedBySaleId(SaleIdFromKey(urls.Names[i]), pageCache, ci)
+          then begin
+            it.artist := pageCache[ci].artist;
+            it.title := pageCache[ci].title;
+          end;
           n := Length(items);
           SetLength(items, n + 1);
           items[n] := it;
@@ -458,8 +526,8 @@ begin
 
     { The first batch is embedded in the page and, per the reference, mixes
       hidden and non-hidden items. Each entry is matched to its item_cache entry
-      by sale_item_id in the URL, which gives its title, artist, and hidden flag.
-      Hidden entries are dropped when hidden items are being skipped. }
+      by the sale_item_id in its redownload_urls key, which gives its title,
+      artist, and hidden flag. Hidden entries are dropped when skipping hidden. }
     urls := collectionData.Get('redownload_urls', TJSONObject(nil));
     if (urls = nil) or (urls.Count = 0) then
       raise EMagicError.Create(
@@ -470,7 +538,7 @@ begin
       it := Default(TCollectionItem);
       it.id := urls.Names[i];
       it.pageUrl := pageUrl;
-      if FindCachedByUrl(pageUrl, cache, ci) then begin
+      if FindCachedBySaleId(SaleIdFromKey(urls.Names[i]), cache, ci) then begin
         it.hidden := cache[ci].hidden;
         it.artist := cache[ci].artist;
         it.title := cache[ci].title;
