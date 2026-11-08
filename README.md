@@ -10,9 +10,11 @@ PUBLIC DOMAIN (CC0-1.0)
 
  * Index your collection without downloading anything.
  * Sync new content, the whole library, selected items, or straight from the
-   stored index.
+   stored index. A repeat sync skips items already downloaded in full without
+   re-contacting the store, so it resumes a large library in seconds.
  * Track multiple versions of an item, so a re-release is a new version and the
-   old files are kept.
+   old files are kept. `check` reports which local copies are current, outdated,
+   incomplete, or not yet downloaded.
  * Detect removed, hidden, and pre-ordered (owned but unreleased) content.
  * Blacklist items you do not want, and record relocations when an item moves to
    a new id.
@@ -26,7 +28,8 @@ Working:
 
  * **bandcamp** (audio; authenticates with browser cookies)
  * **drivethrurpg** (RPG PDFs and files; authenticates with an application key)
- * **itchio** (games, tools, and assets; authenticates with an API key)
+ * **itchio** (games, tools, and assets; authenticates with an API key, plus
+   browser cookies to download session-gated bundle items)
 
 Planned:
 
@@ -293,7 +296,10 @@ Files land under the output directory in one folder per item. Most backends use
 a `Creator - Title` folder. itch.io instead mirrors the store's own layout,
 `<user>.itch.io/<slug>` (for example `finji.itch.io/overland`), taken from the
 item's page URL, so a synced library matches a hand-downloaded `*.itch.io`
-archive. Set the output directory with `--out <dir>` or the config `out` key;
+archive. Bandcamp arrives as a zip of an album's tracks, which magicdl unpacks
+in place into `<Artist>/<year> - <Title>` (the year from the release date), so
+the folder holds the tracks rather than the archive. Set the output directory
+with `--out <dir>` or the config `out` key;
 there is no default, so a sync or verify without one is an error. Add `--covers`
 to also fetch cover images (Bandcamp).
 
@@ -423,7 +429,9 @@ request to resolve the store's current version. An item with nothing on disk is
 reported as not-downloaded without contacting the store, so a check over a large
 library only makes requests for the items held locally. Scope it further with
 item ids or the list filters (`--limit`, `--status`, and so on). itch.io reports
-an MD5 per file, which is what the comparison uses.
+an MD5 per file, which is what the comparison uses. Bandcamp offers no per-file
+hash and its albums are unpacked on download, so for Bandcamp `check` confirms
+that an item's files are present rather than hashing them.
 
 ## How it stores things
 
