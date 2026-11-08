@@ -225,23 +225,47 @@ begin
     BuildItemName := fallbackId;
 end;
 
-{** The statdownload endpoint answers with a JSON object wrapped in a JS call,
-  roughly "if (window.Downloads) Downloads.statResult( OBJECT );". Returns the
-  substring from the first opening brace to the last closing brace, or '' when
-  none is found. }
+{** The statdownload endpoint answers with a JSON object wrapped in a JS call:
+  an "if ( window.Downloads )" block whose body calls Downloads.statResult with
+  the JSON object as its argument. The wrapper block has its own braces, so
+  taking the outermost pair would capture the JS block, not the JSON. This finds
+  the object argument instead: the first brace that opens a quoted key (a brace
+  immediately followed by a double quote), then its matching close by brace
+  depth, with quoted strings skipped so a brace inside a value does not end it
+  early. Returns empty when no such object is present. }
 function UnwrapStatResult(const body: string): string;
 var
-  first, last: LongInt;
+  i, depth, start: LongInt;
+  inStr, esc: boolean;
 begin
   UnwrapStatResult := '';
-  first := Pos('{', body);
-  if first = 0 then
+  start := Pos('{"', body);
+  if start = 0 then
     exit;
-  last := Length(body);
-  while (last > first) and (body[last] <> '}') do
-    Dec(last);
-  if last > first then
-    UnwrapStatResult := Copy(body, first, last - first + 1);
+  depth := 0;
+  inStr := false;
+  esc := false;
+  for i := start to Length(body) do begin
+    if inStr then begin
+      if esc then
+        esc := false
+      else if body[i] = '\' then
+        esc := true
+      else if body[i] = '"' then
+        inStr := false;
+    end
+    else case body[i] of
+      '"': inStr := true;
+      '{': Inc(depth);
+      '}': begin
+          Dec(depth);
+          if depth = 0 then begin
+            UnwrapStatResult := Copy(body, start, i - start + 1);
+            exit;
+          end;
+        end;
+    end;
+  end;
 end;
 
 { ---- TBandcampBackend ---- }
@@ -655,8 +679,10 @@ begin
       end;
     end;
   except
-    { A failed statdownload is not fatal: fall back to the direct URL. }
-    on e: EMagicError do
+    { A failed statdownload is not fatal: fall back to the direct URL. This
+      catches any error, a transport failure or a parse failure, since the
+      direct /download/ URL is a valid alternative in every case. }
+    on e: Exception do
       fCtx.log.Debug(Format('statdownload failed, using direct URL: %s',
         [e.Message]));
   end;
