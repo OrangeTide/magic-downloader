@@ -181,6 +181,10 @@ begin
     client.AllowRedirect := true;
     client.ConnectTimeout := fTimeoutMs;
     client.IOTimeout := fTimeoutMs;
+    { Well-formed request headers a normal client sends: an Accept, and
+      keep-alive rather than the default Connection: close. }
+    client.KeepConnection := true;
+    client.AddHeader('Accept', '*/*');
     if fUserAgent <> '' then
       client.AddHeader('User-Agent', fUserAgent);
     if (fCookies <> nil) and (fCookies.Count > 0) then
