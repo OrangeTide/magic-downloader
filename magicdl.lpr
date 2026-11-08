@@ -1050,20 +1050,43 @@ begin
 end;
 
 {** Compares an item's local files to the store's current version by hash and
-  returns a one-word state: 'current' (every current file held locally matches,
-  none missing), 'outdated' (a local file's hash differs from the current one),
-  'incomplete' (present files match but some current files are not held),
-  'not-downloaded' (nothing local), or 'preorder'/'unavailable' from the store.
-  'unknown' when the store offers no hash to compare. }
+  returns a one-word state: 'current' (every current upload is held, by matching
+  content), 'outdated' (a local file of the same name has different content),
+  'incomplete' (an upload is not held under any name), 'not-downloaded' (nothing
+  local), or 'preorder'/'unavailable' from the store. 'unknown' when the store
+  offers no hash to compare. A current upload is matched to a local file by name
+  first (so a changed same-name file reads outdated), then by content hash, so a
+  renamed but byte-identical copy still counts as held. }
 function CheckItemState(backend: TMagicBackend; const backendName: string;
   index: TMagicIndex; const item: TCollectionItem): string;
 var
   targets: TDownloadTargetArray;
   availability: TAvailability;
   files: TFileInfoArray;
-  importedPath, cand, localPath, localHash: string;
-  i, j, matched, mismatched, missing: LongInt;
-  found: boolean;
+  importedPath, cand, base, algo: string;
+  localPaths, localHashes, localAlgos: TStringArray;
+  i, j, k, nameIdx, matched, mismatched, missing: LongInt;
+  rec: TSearchRec;
+  found, fbFound: boolean;
+
+  { Hashes local file k with algorithm a, caching the result (and a sentinel
+    '?' on failure) so each local file is hashed at most once per algorithm. }
+  function HashOf(idx: LongInt; const a: string): string;
+  begin
+    if localAlgos[idx] <> a then begin
+      try
+        localHashes[idx] := HashFile(a, localPaths[idx]);
+      except
+        on E: Exception do begin
+          gLog.Debug(Format('  hash failed for %s: %s', [localPaths[idx], E.Message]));
+          localHashes[idx] := '?';
+        end;
+      end;
+      localAlgos[idx] := a;
+    end;
+    Result := localHashes[idx];
+  end;
+
 begin
   { Decide first whether anything is held locally. If not, report it without
     contacting the store, so a check over a large library makes a request only
@@ -1079,57 +1102,81 @@ begin
   if (availability <> avAvailable) or (Length(targets) = 0) then
     exit('unavailable');
 
+  { Collect every local file that could satisfy a current upload: recorded
+    present files, and the files directly inside an adopted item's folder. }
+  SetLength(localPaths, 0);
+  for j := 0 to High(files) do
+    if (files[j].state = 'present') and FileExists(files[j].path) then begin
+      SetLength(localPaths, Length(localPaths) + 1);
+      localPaths[High(localPaths)] := files[j].path;
+    end;
+  if (importedPath <> '') and (FindFirst(
+    IncludeTrailingPathDelimiter(importedPath) + '*', faAnyFile, rec) = 0) then
+  try
+    repeat
+      if (rec.Attr and faDirectory) <> 0 then
+        continue;
+      cand := IncludeTrailingPathDelimiter(importedPath) + rec.Name;
+      found := false;
+      for k := 0 to High(localPaths) do
+        if localPaths[k] = cand then begin
+          found := true;
+          break;
+        end;
+      if not found then begin
+        SetLength(localPaths, Length(localPaths) + 1);
+        localPaths[High(localPaths)] := cand;
+      end;
+    until FindNext(rec) <> 0;
+  finally
+    FindClose(rec);
+  end;
+  SetLength(localHashes, Length(localPaths));
+  SetLength(localAlgos, Length(localPaths));
+
   matched := 0;
   mismatched := 0;
   missing := 0;
   for i := 0 to High(targets) do begin
-    { Find the local file for this current target: a recorded present file of
-      the same name, or, for an adopted item, the file in the imported folder. }
-    localPath := '';
-    found := false;
-    for j := 0 to High(files) do
-      if (files[j].name = targets[i].name) and (files[j].state = 'present') then begin
-        localPath := files[j].path;
-        found := true;
+    algo := targets[i].hashAlgo;
+    { Prefer a local file of the same name as the upload, so a same-name file
+      with different content is still reported outdated. }
+    nameIdx := -1;
+    for k := 0 to High(localPaths) do begin
+      base := ExtractFileName(localPaths[k]);
+      if (base = targets[i].name) or (base = targets[i].suggestedName)
+        or (base = SanitizeName(targets[i].suggestedName)) then begin
+        nameIdx := k;
         break;
       end;
-    if (not found) and (importedPath <> '') then begin
-      cand := IncludeTrailingPathDelimiter(importedPath) +
-        SanitizeName(targets[i].suggestedName);
-      if FileExists(cand) then begin
-        localPath := cand;
-        found := true;
-      end
-      else begin
-        cand := IncludeTrailingPathDelimiter(importedPath) + targets[i].suggestedName;
-        if FileExists(cand) then begin
-          localPath := cand;
-          found := true;
-        end;
-      end;
     end;
-    if (not found) or (not FileExists(localPath)) then begin
-      Inc(missing);
+    if nameIdx >= 0 then begin
+      if (targets[i].hash <> '') and (algo <> '') then begin
+        if SameText(HashOf(nameIdx, algo), targets[i].hash) then
+          Inc(matched)
+        else
+          Inc(mismatched);  { same name, different content: outdated }
+      end
+      else
+        Inc(matched);  { present, nothing to verify against }
       continue;
     end;
-
-    if (targets[i].hash <> '') and (targets[i].hashAlgo <> '') then begin
-      try
-        localHash := HashFile(targets[i].hashAlgo, localPath);
-      except
-        on E: Exception do begin
-          gLog.Debug(Format('  hash failed for %s: %s', [localPath, E.Message]));
-          Inc(missing);
-          continue;
+    { No name match: accept any local file whose hash equals the upload's, so a
+      renamed but byte-identical copy still counts as held. }
+    if (targets[i].hash <> '') and (algo <> '') then begin
+      fbFound := false;
+      for k := 0 to High(localPaths) do
+        if SameText(HashOf(k, algo), targets[i].hash) then begin
+          fbFound := true;
+          break;
         end;
-      end;
-      if SameText(localHash, targets[i].hash) then
+      if fbFound then
         Inc(matched)
       else
-        Inc(mismatched);
+        Inc(missing);
     end
     else
-      Inc(matched);  { present but no hash to verify against }
+      Inc(missing);
   end;
 
   if mismatched > 0 then
