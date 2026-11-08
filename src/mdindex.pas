@@ -208,8 +208,24 @@ begin
   fConn.Transaction := fTrans;
   fTrans.Database := fConn;
   fConn.Open;
+  { These settings cannot change inside a transaction, and sqldb wraps
+    ExecuteDirect in one, so switch the transaction to implicit (SQLite
+    autocommit) while applying them, then restore explicit batching.
+      journal_mode = WAL: readers and the single writer stop blocking each
+        other, so concurrent magicdl runs on this shared index contend far
+        less. Persistent, kept in the database file, so this applies it once.
+      synchronous = NORMAL: safe under WAL and shortens each commit.
+      foreign_keys = ON: enforce the schema's references (a no-op if set inside
+        a transaction, which is why it belongs here).
+      busy_timeout: wait for a held lock instead of failing at once, so a
+        second magicdl process queues rather than aborting "database is
+        locked". Per connection, so it is reapplied on every open. }
+  fTrans.Options := [stoUseImplicit];
+  fConn.ExecuteDirect('PRAGMA journal_mode = WAL');
+  fConn.ExecuteDirect('PRAGMA synchronous = NORMAL');
   fConn.ExecuteDirect('PRAGMA foreign_keys = ON');
-  fTrans.Commit;
+  fConn.ExecuteDirect('PRAGMA busy_timeout = 10000');
+  fTrans.Options := [];
   EnsureSchema;
 end;
 
