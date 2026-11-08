@@ -712,6 +712,16 @@ begin
     if statJson <> '' then begin
       data := GetJSON(statJson);
       try
+        { A result of "err" means the store has withdrawn this download, for
+          example ExtensionsCutOffError, a free-download window that has closed.
+          Report it unavailable instead of falling through to the direct URL,
+          which answers 403 and would abort the whole sync. }
+        if SameText(TJSONObject(data).Get('result', ''), 'err') then begin
+          fCtx.log.Debug(Format('  %s withdrawn by store: %s', [item.id,
+            TJSONObject(data).Get('errortype', 'download refused')]));
+          availability := avUnavailable;
+          exit;
+        end;
         realUrl := TJSONObject(data).Get('download_url', '');
         if realUrl <> '' then
           target.downloadUrl := realUrl;
