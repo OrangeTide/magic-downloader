@@ -29,15 +29,16 @@ type
       the HTTP status code. Reports the server's suggested filename (from
       Content-Disposition) in contentDisposition. Raises only for transport
       failures (no HTTP answer). }
-    function DoOnceToStream(const method, url, requestBody: string;
-      respStream: TStream; sendAuth: boolean; out contentDisposition: string): LongInt;
+    function DoOnceToStream(const method, url, requestBody, contentType: string;
+      respStream: TStream; sendAuth, xhr: boolean;
+      out contentDisposition: string): LongInt;
     {** The shared pacing and retry loop. Writes the successful response body to
       respStream, which is reset before each attempt. }
-    procedure RunWithRetry(const method, url, requestBody: string;
-      respStream: TStream; pacing: TPacing; sendAuth: boolean;
+    procedure RunWithRetry(const method, url, requestBody, contentType: string;
+      respStream: TStream; pacing: TPacing; sendAuth, xhr: boolean;
       out contentDisposition: string);
-    function Request(const method, url, requestBody: string;
-      pacing: TPacing): string;
+    function Request(const method, url, requestBody, contentType: string;
+      pacing: TPacing; xhr: boolean = false): string;
   public
     constructor Create(aLog: TMagicLogger; aPacer: TPacer; aCookies: TCookieJar;
       aRetries: LongInt; aTimeoutMs: LongInt; const aUserAgent: string = '');
@@ -46,6 +47,11 @@ type
     procedure SetAuthHeader(const value: string);
     function Get(const url: string; pacing: TPacing = pcNormal): string;
     function PostJson(const url, jsonBody: string;
+      pacing: TPacing = pcNormal): string;
+    {** POSTs a form-encoded body as an XMLHttpRequest (the content type and the
+      X-Requested-With header a browser sends), returning the response body. The
+      itch.io web download endpoint answers such a request with the file URL. }
+    function PostForm(const url, formBody: string;
       pacing: TPacing = pcNormal): string;
     {** Streams a URL to a file in destDir, paced and retried. Uses the server's
       suggested filename when it sends one, otherwise fallbackName. Writes to a
@@ -270,8 +276,8 @@ begin
   end;
 end;
 
-function TMagicHttp.DoOnceToStream(const method, url, requestBody: string;
-  respStream: TStream; sendAuth: boolean; out contentDisposition: string): LongInt;
+function TMagicHttp.DoOnceToStream(const method, url, requestBody, contentType: string;
+  respStream: TStream; sendAuth, xhr: boolean; out contentDisposition: string): LongInt;
 var
   client: TFPHTTPClient;
   reqStream: TStringStream;
@@ -293,8 +299,13 @@ begin
       client.AddHeader('Cookie', fCookies.HeaderValue);
     if sendAuth and (fAuthHeader <> '') then
       client.AddHeader('Authorization', fAuthHeader);
+    if xhr then
+      client.AddHeader('X-Requested-With', 'XMLHttpRequest');
     if requestBody <> '' then begin
-      client.AddHeader('Content-Type', 'application/json');
+      if contentType <> '' then
+        client.AddHeader('Content-Type', contentType)
+      else
+        client.AddHeader('Content-Type', 'application/json');
       reqStream := TStringStream.Create(requestBody);
       client.RequestBody := reqStream;
     end;
@@ -309,8 +320,8 @@ begin
   end;
 end;
 
-procedure TMagicHttp.RunWithRetry(const method, url, requestBody: string;
-  respStream: TStream; pacing: TPacing; sendAuth: boolean;
+procedure TMagicHttp.RunWithRetry(const method, url, requestBody, contentType: string;
+  respStream: TStream; pacing: TPacing; sendAuth, xhr: boolean;
   out contentDisposition: string);
 var
   attempt, attempts, statusCode: LongInt;
@@ -325,8 +336,8 @@ begin
     respStream.Size := 0;
     respStream.Position := 0;
     try
-      statusCode := DoOnceToStream(method, url, requestBody, respStream,
-        sendAuth, contentDisposition);
+      statusCode := DoOnceToStream(method, url, requestBody, contentType,
+        respStream, sendAuth, xhr, contentDisposition);
       if statusCode >= 400 then
         raise EMagicHttpError.Create(
           Format('HTTP %d for %s', [statusCode, RedactUrl(url)]), statusCode);
@@ -366,15 +377,16 @@ begin
     [fRetries]);
 end;
 
-function TMagicHttp.Request(const method, url, requestBody: string;
-  pacing: TPacing): string;
+function TMagicHttp.Request(const method, url, requestBody, contentType: string;
+  pacing: TPacing; xhr: boolean): string;
 var
   buf: TStringStream;
   disposition: string;
 begin
   buf := TStringStream.Create('');
   try
-    RunWithRetry(method, url, requestBody, buf, pacing, true, disposition);
+    RunWithRetry(method, url, requestBody, contentType, buf, pacing, true, xhr,
+      disposition);
     Request := buf.DataString;
   finally
     buf.Free;
@@ -388,12 +400,18 @@ end;
 
 function TMagicHttp.Get(const url: string; pacing: TPacing): string;
 begin
-  Get := Request('GET', url, '', pacing);
+  Get := Request('GET', url, '', '', pacing);
 end;
 
 function TMagicHttp.PostJson(const url, jsonBody: string; pacing: TPacing): string;
 begin
-  PostJson := Request('POST', url, jsonBody, pacing);
+  PostJson := Request('POST', url, jsonBody, 'application/json', pacing);
+end;
+
+function TMagicHttp.PostForm(const url, formBody: string; pacing: TPacing): string;
+begin
+  PostForm := Request('POST', url, formBody,
+    'application/x-www-form-urlencoded; charset=UTF-8', pacing, true);
 end;
 
 function TMagicHttp.Download(const url, destDir, fallbackName: string;
@@ -408,7 +426,7 @@ begin
   try
     { No auth header on downloads: file URLs go to CDN/watermark hosts that
       reject the API token (DriveThruRPG returns a 302 that then 400s). }
-    RunWithRetry('GET', url, '', fs, pacing, false, disposition);
+    RunWithRetry('GET', url, '', '', fs, pacing, false, false, disposition);
   finally
     fs.Free;
   end;

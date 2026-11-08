@@ -70,6 +70,9 @@ type
     hashAlgo: string;    { the hash algorithm: 'md5', 'sha256', or '' }
     extract: boolean;    { the download is an archive to unpack in place, then
                            remove (bandcamp albums arrive as a zip of tracks) }
+    needsMint: boolean;  { downloadUrl is not the file: the backend mints the
+                           real, short-lived URL from it just before downloading
+                           (itch.io's session download endpoint) }
   end;
   TDownloadTargetArray = array of TDownloadTarget;
 

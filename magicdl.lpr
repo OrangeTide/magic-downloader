@@ -989,8 +989,10 @@ begin
 
     fileName := SanitizeName(targets[i].suggestedName);
     gLog.Info(Format('  downloading "%s"...', [targets[i].suggestedName]));
-    savedPath := ctx.http.Download(targets[i].downloadUrl, itemDir, fileName,
-      pcNormal);
+    { Resolve the final URL just before fetching, so a backend that mints a
+      short-lived link (itch.io's session download) does so in time. }
+    savedPath := ctx.http.Download(backend.ResolveDownloadUrl(targets[i]),
+      itemDir, fileName, pcNormal);
 
     if targets[i].extract and IsZipArchive(savedPath) then begin
       { Unpack the archive in place and drop it, so the folder holds the tracks

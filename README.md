@@ -138,6 +138,16 @@ For itch.io the account name need not match anything; the itch.io username shown
 in the log comes from the API key itself, so you can confirm which account a run
 is using.
 
+Some itch.io items, bundle items in particular, will not download with the API
+key alone: itch.io checks the entitlement against your logged-in web session.
+For those, add `--firefox` (or `--cookies <file>`) so magicdl loads your itch.io
+session and downloads the way the browser does. The API key is still needed to
+list the collection, so keep it set; the cookies only affect downloading.
+
+```
+magicdl sync --backend itchio --from-index --firefox --out ~/Games 161424645:4637328
+```
+
 If no keyring is available, a key file is the fallback. Keep the key in a file
 readable only by you and pass it, so the key does not appear on the command
 line:

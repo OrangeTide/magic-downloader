@@ -33,12 +33,14 @@ unit mdbackend_itchio;
 interface
 
 uses
-  Classes, SysUtils, fpjson, jsonparser, mdtypes, mdbackend, mdhttp, mdpacing;
+  Classes, SysUtils, StrUtils, fpjson, jsonparser, mdtypes, mdbackend, mdhttp,
+  mdpacing;
 
 type
   TItchIoBackend = class(TMagicBackend)
   private
     fAccount: string;  { itch.io username, read from the profile at auth time }
+    fCsrf: string;     { web-session CSRF token, read from a game page }
     {** Pages through owned-keys; extraQuery narrows the query (e.g. game_ids). }
     function FetchOwnedKeys(const extraQuery: string): TCollectionItemArray;
     {** The numeric game ids of a bundle, from its public games.json. }
@@ -47,6 +49,7 @@ type
     function FetchOwnedBundles: TScopeInfoArray;
   public
     class function BackendName: string; override;
+    class function CookieHost: string; override;
     procedure Authenticate; override;
     function AccountLabel: string; override;
     function ItemSubdir(const item: TCollectionItem): string; override;
@@ -58,6 +61,7 @@ type
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; override;
+    function ResolveDownloadUrl(const target: TDownloadTarget): string; override;
   end;
 
 implementation
@@ -86,6 +90,14 @@ end;
 class function TItchIoBackend.BackendName: string;
 begin
   BackendName := 'itchio';
+end;
+
+class function TItchIoBackend.CookieHost: string;
+begin
+  { Lets --firefox/--cookies load the itch.io web session. The API key alone
+    cannot download items whose entitlement lives in that session. The leading
+    dot matches how Firefox stores the domain cookie. }
+  CookieHost := '.itch.io';
 end;
 
 procedure TItchIoBackend.Authenticate;
@@ -474,17 +486,52 @@ begin
   ResolveCoverUrl := item.coverUrl;
 end;
 
+{** The text between the first startMark and the next endMark after it, or ''
+  when either is absent. Used to pull a value out of a game page's HTML. }
+function Between(const s, startMark, endMark: string): string;
+var
+  p, q: LongInt;
+begin
+  Between := '';
+  p := Pos(startMark, s);
+  if p = 0 then
+    exit;
+  p := p + Length(startMark);
+  q := PosEx(endMark, s, p);
+  if q = 0 then
+    exit;
+  Between := Copy(s, p, q - p);
+end;
+
+{** Percent-encodes a string for an application/x-www-form-urlencoded body,
+  leaving the RFC 3986 unreserved characters as they are. }
+function FormEncode(const s: string): string;
+var
+  i: LongInt;
+  c: Char;
+begin
+  FormEncode := '';
+  for i := 1 to Length(s) do begin
+    c := s[i];
+    if c in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~'] then
+      FormEncode := FormEncode + c
+    else
+      FormEncode := FormEncode + '%' + HexStr(Ord(c), 2);
+  end;
+end;
+
 function TItchIoBackend.ResolveFiles(const item: TCollectionItem;
   out availability: TAvailability): TDownloadTargetArray;
 var
   parts: TStringArray;
   dlKeyId, gameId, respText, versionKey, fname: string;
+  pageHtml, secret: string;
   data: TJSONData;
   uploadsArr: TJSONArray;
   upload: TJSONObject;
   target: TDownloadTarget;
   i, n: LongInt;
-  hasPreorder: boolean;
+  hasPreorder, useWeb: boolean;
 begin
   Result := nil;
   availability := avUnavailable;
@@ -515,6 +562,26 @@ begin
     if versionKey = '' then
       versionKey := 'default';
 
+    { With a web session (cookies loaded), download the way the browser does:
+      the API download endpoint refuses items whose entitlement lives in the
+      session (bundle claims), so read the game page for the download key and
+      CSRF token and mint each file URL through the web endpoint. Without
+      cookies, keep the API download, which works for directly owned items. }
+    useWeb := false;
+    secret := '';
+    if (fCtx.cookies <> nil) and (fCtx.cookies.Count > 0)
+      and (item.pageUrl <> '') then begin
+      pageHtml := fCtx.http.Get(item.pageUrl, pcLight);
+      secret := Between(pageHtml, item.pageUrl + '/download/', '"');
+      fname := Between(pageHtml, 'name="csrf_token" value="', '"');
+      if fname <> '' then
+        fCsrf := fname;
+      useWeb := (secret <> '') and (fCsrf <> '');
+      if not useWeb then
+        fCtx.log.Debug(Format(
+          '  %s: no web download key on the page, using the API URL', [item.id]));
+    end;
+
     hasPreorder := false;
     for i := 0 to uploadsArr.Count - 1 do begin
       if not (uploadsArr.Items[i] is TJSONObject) then
@@ -541,9 +608,17 @@ begin
       target.hash := upload.Get('md5_hash', '');
       if target.hash <> '' then
         target.hashAlgo := 'md5';
-      target.downloadUrl := BASE_URL + Format(
-        '/uploads/%d/download?api_key=%s&download_key_id=%s',
-        [upload.Get('id', Int64(0)), fCtx.apiKey, dlKeyId]);
+      if useWeb then begin
+        { The web endpoint answers a POST with the short-lived file URL, so
+          mark it for just-in-time minting in ResolveDownloadUrl. }
+        target.downloadUrl := Format('%s/file/%d?source=game_download&key=%s',
+          [item.pageUrl, upload.Get('id', Int64(0)), secret]);
+        target.needsMint := true;
+      end
+      else
+        target.downloadUrl := BASE_URL + Format(
+          '/uploads/%d/download?api_key=%s&download_key_id=%s',
+          [upload.Get('id', Int64(0)), fCtx.apiKey, dlKeyId]);
       n := Length(Result);
       SetLength(Result, n + 1);
       Result[n] := target;
@@ -556,6 +631,38 @@ begin
     availability := avAvailable
   else if hasPreorder then
     availability := avPreorder;
+end;
+
+function TItchIoBackend.ResolveDownloadUrl(const target: TDownloadTarget): string;
+var
+  resp: string;
+  data: TJSONData;
+begin
+  if not target.needsMint then
+    exit(target.downloadUrl);
+
+  { POST the game's file endpoint as the browser does; it answers with the
+    short-lived signed URL of the file in a JSON "url" field. }
+  resp := fCtx.http.PostForm(target.downloadUrl, 'csrf_token=' + FormEncode(fCsrf),
+    pcNormal);
+  try
+    data := GetJSON(resp);
+  except
+    on e: Exception do
+      raise EMagicError.CreateFmt(
+        'itch.io did not return a download URL for "%s": %s',
+        [target.suggestedName, e.Message]);
+  end;
+  try
+    ResolveDownloadUrl := '';
+    if data is TJSONObject then
+      ResolveDownloadUrl := TJSONObject(data).Get('url', '');
+    if ResolveDownloadUrl = '' then
+      raise EMagicError.CreateFmt(
+        'itch.io returned no download URL for "%s".', [target.suggestedName]);
+  finally
+    data.Free;
+  end;
 end;
 
 initialization

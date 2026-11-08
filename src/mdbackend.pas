@@ -114,6 +114,12 @@ type
       unavailable item returns an empty array and the matching availability. }
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; virtual; abstract;
+
+    {** Resolves the final direct download URL for a target, called right before
+      the download. The default returns target.downloadUrl unchanged. A backend
+      overrides this to mint a short-lived URL just in time, when target.needsMint
+      is set (itch.io's session download endpoint answers with the file URL). }
+    function ResolveDownloadUrl(const target: TDownloadTarget): string; virtual;
   end;
 
 {** Registers a backend class under its BackendName. Call once at unit
@@ -135,6 +141,11 @@ constructor TMagicBackend.Create(const aCtx: TMagicContext);
 begin
   inherited Create;
   fCtx := aCtx;
+end;
+
+function TMagicBackend.ResolveDownloadUrl(const target: TDownloadTarget): string;
+begin
+  ResolveDownloadUrl := target.downloadUrl;
 end;
 
 class function TMagicBackend.CookieHost: string;

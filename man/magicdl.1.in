@@ -222,11 +222,13 @@ Read the application or API key from a file, so it never appears on the command
 line.
 .TP
 .BI "\-\-cookies " path
-Cookies file (Bandcamp): a Firefox cookies.sqlite, a Cookie Quick Manager JSON
-export, or a Netscape cookies.txt.
+Cookies file (Bandcamp, and itch.io for session\-gated downloads): a Firefox
+cookies.sqlite, a Cookie Quick Manager JSON export, or a Netscape cookies.txt.
 .TP
 .B \-\-firefox
-Load Bandcamp cookies from the Firefox profiles on this machine.
+Load cookies from the Firefox profiles on this machine. Bandcamp needs them to
+download; itch.io needs them only for items whose entitlement lives in the web
+session, such as bundle items, which the API key alone cannot fetch.
 .SS Storage and content
 .TP
 .BI "\-\-db " path
