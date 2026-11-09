@@ -83,6 +83,15 @@ type
       "<user>.itch.io/<slug>" folders map one to one onto items. }
     function ImportsByPath: boolean; virtual;
 
+    {** True when this backend lays items out as nested "<host>/<item>" folders,
+      so `reorganize` can group a shared archive by host and adopt loose files
+      into the owning item's folder. itch.io ("<user>.itch.io/<slug>") and
+      Bandcamp ("<artist>/<album>") both do; a backend whose ItemSubdir is a
+      single flat folder (or empty) does not. This is separate from
+      ImportsByPath, which only picks how `import` matches existing folders.
+      Default: false. }
+    function ReorganizesByFolder: boolean; virtual;
+
     {** Returns every item in the user's collection. Does not download anything. }
     function ListCollection: TCollectionItemArray; virtual; abstract;
 
@@ -173,6 +182,11 @@ end;
 function TMagicBackend.ImportsByPath: boolean;
 begin
   ImportsByPath := false;
+end;
+
+function TMagicBackend.ReorganizesByFolder: boolean;
+begin
+  ReorganizesByFolder := false;
 end;
 
 function TMagicBackend.SupportsScope: boolean;

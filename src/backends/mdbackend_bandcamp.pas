@@ -55,6 +55,7 @@ type
     procedure Authenticate; override;
     function ListCollection: TCollectionItemArray; override;
     function ItemSubdir(const item: TCollectionItem): string; override;
+    function ReorganizesByFolder: boolean; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; override;
@@ -634,6 +635,14 @@ begin
     ItemSubdir := item.artist + '/' + item.title
   else
     ItemSubdir := item.artist;
+end;
+
+function TBandcampBackend.ReorganizesByFolder: boolean;
+begin
+  { "<artist>/<album>" nests the item under its artist, so reorganize can adopt
+    loose files by name. It cannot sort a multi-album artist by hash, since
+    Bandcamp serves on-demand zips with no stable store-side hash. }
+  ReorganizesByFolder := true;
 end;
 
 function TBandcampBackend.ResolveCoverUrl(const item: TCollectionItem): string;

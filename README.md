@@ -397,21 +397,29 @@ magicdl import --backend itchio ~/itch-archive --dry-run
 
 Bandcamp instead matches an `Artist/YYYY - Album` music library by name.
 
-If an old archive keeps a creator's files loose under `<user>.itch.io/` with no
-per-item folder, `import` cannot adopt them. `reorganize` prepares such an
-archive: for each host that owns exactly one indexed item, it moves the loose
-files into that item's `<user>.itch.io/<slug>` folder, so `import` adopts them
-on the next run. This pass is offline. Review the moves with `--dry-run` first:
+If an old archive keeps a host's files loose with no per-item folder, `import`
+cannot adopt them. `reorganize` prepares such an archive: for each host that owns
+exactly one indexed item, it moves the loose files into that item's folder, so
+`import` adopts them on the next run. This pass is offline. Review the moves with
+`--dry-run` first:
 
 ```
 magicdl reorganize --backend itchio ~/itch-archive --dry-run
 magicdl reorganize --backend itchio ~/itch-archive
 ```
 
-A host that owns several items is left alone by default, since a loose file
-there cannot be placed by path. `--hash` handles those too: it matches each loose
-file's MD5 against the store-side upload hashes and moves it under the slug whose
-upload it matches. A file that matches no upload is left where it is.
+`reorganize` works for backends that lay items out as `<host>/<item>` folders:
+itch.io (`<user>.itch.io/<slug>`) and Bandcamp (`<artist>/<album>`). DriveThruRPG
+uses a single flat folder per item, so there is no shared host folder to adopt
+loose files from; use `import` for it.
+
+A host that owns several items is left alone by default, since a loose file there
+cannot be placed by name. On itch.io, `--hash` handles those too: it matches each
+loose file's MD5 against the store-side upload hashes and moves it under the slug
+whose upload it matches. A file that matches no upload is left where it is.
+Bandcamp serves on-demand zips with no stable store-side hash, so `--hash` and
+`--hash-cross-host` are not available there; a multi-album artist's loose files
+are reported and left in place.
 
 Those upload hashes come from the index. Populate them first with `index
 --hashes`, which resolves each item's files once and stores their hashes:

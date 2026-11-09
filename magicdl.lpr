@@ -122,9 +122,9 @@ begin
   Writeln('  allow <id>...              Remove items from the blacklist');
   Writeln('  relocate <old> <new>       Record that an item moved to a new id');
   Writeln('  forget <id>...             Clear the adopted mark so sync fetches again');
-  Writeln('  reorganize <dir>           Fold loose files into <user>.itch.io/<slug>');
-  Writeln('                             folders (itchio; --hash also sorts multi-');
-  Writeln('                             owner hosts by upload hash)');
+  Writeln('  reorganize <dir>           Fold loose files into per-host item folders');
+  Writeln('                             (itchio, bandcamp; --hash also sorts multi-');
+  Writeln('                             owner hosts by upload hash, itchio only)');
   Writeln('  import <dir>               Mark items already in an Artist/Album library');
   Writeln('  manifest                   Write a library manifest (Markdown or --html)');
   Writeln('                             with download checkboxes (filters apply)');
@@ -2576,9 +2576,19 @@ begin
   backend := backendClass.Create(ctx);
   authed := false;
   try
-    if not backend.ImportsByPath then
-      raise EMagicError.CreateFmt('Backend "%s" organizes by name, not by a '
-        + 'per-item folder; reorganize supports path-based backends (itchio).',
+    if not backend.ReorganizesByFolder then
+      raise EMagicError.CreateFmt('Backend "%s" does not lay items out as '
+        + '<host>/<item> folders; reorganize supports folder-based backends '
+        + '(itchio, bandcamp).', [backendName]);
+
+    { The hash passes need a store-side hash catalog, which only some backends
+      report. Bandcamp serves on-demand zips with no stable hash, so --hash and
+      --hash-cross-host cannot work there; reject them with a clear message
+      rather than making useless network calls that match nothing. }
+    if useHash and not backend.ReportsFileHashes then
+      raise EMagicError.CreateFmt('Backend "%s" does not provide file hashes, '
+        + 'so --hash and --hash-cross-host are not supported. reorganize can '
+        + 'still place loose files by folder name (run it without --hash).',
         [backendName]);
 
     { Group indexed items by host, the first segment of ItemSubdir. Objects[]
@@ -2757,10 +2767,17 @@ begin
       verb := 'Would fold'
     else
       verb := 'Folded';
-    if not useHash then
-      gLog.Info(Format('%s %d file(s) into %d single-owner host(s); %d '
-        + 'multi-owner host(s) with loose files left (use --hash to place them).',
-        [verb, filesMoved, foldered, multiHosts]))
+    if not useHash then begin
+      if backend.ReportsFileHashes then
+        gLog.Info(Format('%s %d file(s) into %d single-owner host(s); %d '
+          + 'multi-owner host(s) with loose files left (use --hash to place '
+          + 'them).', [verb, filesMoved, foldered, multiHosts]))
+      else
+        gLog.Info(Format('%s %d file(s) into %d single-owner host(s); %d '
+          + 'multi-owner host(s) with loose files left (this backend reports no '
+          + 'hashes, so they cannot be sorted automatically).',
+          [verb, filesMoved, foldered, multiHosts]));
+    end
     else
       gLog.Info(Format('%s %d file(s): %d into single-owner hosts, %d into %d '
         + 'multi-owner host(s) by hash; %d loose file(s) had no store match; '

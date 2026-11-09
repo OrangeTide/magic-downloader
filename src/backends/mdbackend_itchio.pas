@@ -64,6 +64,7 @@ type
     function AccountLabel: string; override;
     function ItemSubdir(const item: TCollectionItem): string; override;
     function ImportsByPath: boolean; override;
+    function ReorganizesByFolder: boolean; override;
     function ListCollection: TCollectionItemArray; override;
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
@@ -185,6 +186,11 @@ end;
 function TItchIoBackend.ImportsByPath: boolean;
 begin
   ImportsByPath := true;  { match an archive by <user>.itch.io/<slug> folders }
+end;
+
+function TItchIoBackend.ReorganizesByFolder: boolean;
+begin
+  ReorganizesByFolder := true;  { <user>.itch.io/<slug> nests item under host }
 end;
 
 {** Builds a collection item from one owned_key object. }

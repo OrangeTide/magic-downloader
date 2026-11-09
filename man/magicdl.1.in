@@ -113,22 +113,33 @@ locally. Use it to refresh an item adopted from an archive once the store has a
 newer version. An item that was not adopted is reported and left unchanged.
 .TP
 .BI "reorganize " dir
-Fold loose files in a path\-based archive into the per\-item subfolders the
-backend expects, so
+Fold loose files in an archive into the per\-item subfolders the backend lays
+items out as, so
 .B import
-can then adopt them. For each
-.IR <user> .itch.io/
-host that owns exactly one indexed item, the files sitting directly under the
-host are moved into
-.IR <user> .itch.io/ <slug> .
-This pass is offline.
+can then adopt them. It serves backends that nest an item under a host folder:
+itch.io
+.RI ( <user> .itch.io/ <slug> )
+and Bandcamp
+.RI ( <artist> / <album> ).
+For each host that owns exactly one indexed item, the files sitting directly
+under the host are moved into that item's folder. This pass is offline.
+DriveThruRPG uses a single flat folder per item, with no shared host folder, so
+.B reorganize
+does not apply to it; use
+.B import
+instead.
 .IP
 With
 .B \-\-hash
 it also handles a host that owns several items, where a loose file cannot be
-placed by path alone. It matches each loose file's hash against the store-side
+placed by name alone. It matches each loose file's hash against the store-side
 upload hashes and moves it under the slug whose upload it matches. A loose file
-matching no upload is left in place. The upload hashes come from the index:
+matching no upload is left in place. This needs store-side hashes, which only
+itch.io reports; Bandcamp serves on-demand zips with no stable hash, so
+.B \-\-hash
+and
+.B \-\-hash\-cross\-host
+are rejected there. The upload hashes come from the index:
 populate them once with
 .B index \-\-hashes
 and this pass runs entirely offline. Without them it resolves a host's items from
@@ -146,7 +157,7 @@ This recovers files sitting in a folder whose name no longer matches the item's
 host, for example when a creator renamed their itch username, which the per-host
 pass cannot see. It is offline and uses only stored hashes, so run
 .B index \-\-hashes
-first. Only itch.io, which imports by path, supports this. Use
+first. Only itch.io, which reports store-side hashes, supports this. Use
 .B \-\-dry\-run
 to review the moves first.
 .TP
