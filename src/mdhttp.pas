@@ -38,21 +38,26 @@ type
       respStream: TStream; pacing: TPacing; sendAuth, xhr: boolean;
       out contentDisposition: string);
     function Request(const method, url, requestBody, contentType: string;
-      pacing: TPacing; xhr: boolean = false): string;
+      pacing: TPacing; xhr: boolean = false; sendAuth: boolean = true): string;
   public
     constructor Create(aLog: TMagicLogger; aPacer: TPacer; aCookies: TCookieJar;
       aRetries: LongInt; aTimeoutMs: LongInt; const aUserAgent: string = '');
     {** Sets an Authorization header value sent on every request (empty clears
       it). Used by token-authenticated backends. }
     procedure SetAuthHeader(const value: string);
-    function Get(const url: string; pacing: TPacing = pcNormal): string;
+    {** GETs a URL. sendAuth=False omits the Authorization header, for a request
+      that must look like a plain browser page load (the itch.io game page serves
+      a different page to an API-authenticated request, without the web download
+      link), relying on cookies alone. }
+    function Get(const url: string; pacing: TPacing = pcNormal;
+      sendAuth: boolean = true): string;
     function PostJson(const url, jsonBody: string;
       pacing: TPacing = pcNormal): string;
     {** POSTs a form-encoded body as an XMLHttpRequest (the content type and the
       X-Requested-With header a browser sends), returning the response body. The
       itch.io web download endpoint answers such a request with the file URL. }
     function PostForm(const url, formBody: string;
-      pacing: TPacing = pcNormal): string;
+      pacing: TPacing = pcNormal; sendAuth: boolean = true): string;
     {** Streams a URL to a file in destDir, paced and retried. Uses the server's
       suggested filename when it sends one, otherwise fallbackName. Writes to a
       .part file and renames on success. Returns the final path. }
@@ -378,15 +383,15 @@ begin
 end;
 
 function TMagicHttp.Request(const method, url, requestBody, contentType: string;
-  pacing: TPacing; xhr: boolean): string;
+  pacing: TPacing; xhr: boolean; sendAuth: boolean): string;
 var
   buf: TStringStream;
   disposition: string;
 begin
   buf := TStringStream.Create('');
   try
-    RunWithRetry(method, url, requestBody, contentType, buf, pacing, true, xhr,
-      disposition);
+    RunWithRetry(method, url, requestBody, contentType, buf, pacing, sendAuth,
+      xhr, disposition);
     Request := buf.DataString;
   finally
     buf.Free;
@@ -398,9 +403,10 @@ begin
   fAuthHeader := value;
 end;
 
-function TMagicHttp.Get(const url: string; pacing: TPacing): string;
+function TMagicHttp.Get(const url: string; pacing: TPacing;
+  sendAuth: boolean): string;
 begin
-  Get := Request('GET', url, '', '', pacing);
+  Get := Request('GET', url, '', '', pacing, false, sendAuth);
 end;
 
 function TMagicHttp.PostJson(const url, jsonBody: string; pacing: TPacing): string;
@@ -408,10 +414,11 @@ begin
   PostJson := Request('POST', url, jsonBody, 'application/json', pacing);
 end;
 
-function TMagicHttp.PostForm(const url, formBody: string; pacing: TPacing): string;
+function TMagicHttp.PostForm(const url, formBody: string; pacing: TPacing;
+  sendAuth: boolean): string;
 begin
   PostForm := Request('POST', url, formBody,
-    'application/x-www-form-urlencoded; charset=UTF-8', pacing, true);
+    'application/x-www-form-urlencoded; charset=UTF-8', pacing, true, sendAuth);
 end;
 
 function TMagicHttp.Download(const url, destDir, fallbackName: string;

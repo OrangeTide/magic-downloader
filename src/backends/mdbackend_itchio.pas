@@ -607,6 +607,27 @@ begin
   Between := Copy(s, p, q - p);
 end;
 
+{** Extracts the CSRF token from a game page. itch.io renders the hidden input
+  value-first ("value="<token>" name="csrf_token""), but has used name-first in
+  the past, so both orders are handled. Returns '' when not found. }
+function CsrfToken(const html: string): string;
+var
+  namePos, valPos: LongInt;
+begin
+  { name-first: name="csrf_token" value="<token>" }
+  CsrfToken := Between(html, 'name="csrf_token" value="', '"');
+  if CsrfToken <> '' then
+    exit;
+  { value-first: value="<token>" name="csrf_token" }
+  namePos := Pos(' name="csrf_token"', html);
+  if namePos = 0 then
+    exit;
+  valPos := RPos('value="', Copy(html, 1, namePos));
+  if valPos = 0 then
+    exit;
+  CsrfToken := Between(Copy(html, valPos, namePos - valPos + 1), 'value="', '"');
+end;
+
 {** Percent-encodes a string for an application/x-www-form-urlencoded body,
   leaving the RFC 3986 unreserved characters as they are. }
 function FormEncode(const s: string): string;
@@ -629,7 +650,8 @@ function TItchIoBackend.ResolveFiles(const item: TCollectionItem;
 var
   parts: TStringArray;
   dlKeyId, gameId, respText, versionKey, fname: string;
-  pageHtml, secret: string;
+  pageHtml, secret, pagePath: string;
+  pp: LongInt;
   data: TJSONData;
   uploadsArr: TJSONArray;
   upload: TJSONObject;
@@ -675,9 +697,25 @@ begin
     secret := '';
     if (fCtx.cookies <> nil) and (fCtx.cookies.Count > 0)
       and (item.pageUrl <> '') then begin
-      pageHtml := fCtx.http.Get(item.pageUrl, pcLight);
-      secret := Between(pageHtml, item.pageUrl + '/download/', '"');
-      fname := Between(pageHtml, 'name="csrf_token" value="', '"');
+      { Fetch the page as a browser does, with cookies but no Bearer key: itch.io
+        serves an API-authenticated request a different page, without the web
+        download link. }
+      pageHtml := fCtx.http.Get(item.pageUrl, pcLight, false);
+      { The page renders the download link as a path ("/<slug>/download/<secret>"),
+        not an absolute URL, so match on the path taken from item.pageUrl. A path
+        substring also matches an absolute link, so this covers both renderings. }
+      pagePath := item.pageUrl;
+      pp := Pos('://', pagePath);
+      if pp > 0 then
+        pagePath := Copy(pagePath, pp + 3, MaxInt);  { drop scheme + host added below }
+      pp := Pos('/', pagePath);
+      if pp > 0 then
+        pagePath := Copy(pagePath, pp, MaxInt)        { "/<slug>" }
+      else
+        pagePath := '';
+      if pagePath <> '' then
+        secret := Between(pageHtml, pagePath + '/download/', '"');
+      fname := CsrfToken(pageHtml);
       if fname <> '' then
         fCsrf := fname;
       useWeb := (secret <> '') and (fCsrf <> '');
@@ -748,7 +786,7 @@ begin
   { POST the game's file endpoint as the browser does; it answers with the
     short-lived signed URL of the file in a JSON "url" field. }
   resp := fCtx.http.PostForm(target.downloadUrl, 'csrf_token=' + FormEncode(fCsrf),
-    pcNormal);
+    pcNormal, false);
   try
     data := GetJSON(resp);
   except
