@@ -172,6 +172,8 @@ begin
   Writeln('                             hashes, so reorganize --hash runs offline (itchio)');
   Writeln('  --hash                     reorganize: also sort multi-owner hosts by hash');
   Writeln('                             (uses stored hashes; falls back to the store)');
+  Writeln('  --hash-cross-host          reorganize: also match a loose file to an owned');
+  Writeln('                             item on any host (renamed folders); needs --hashes');
   Writeln('  --max-owned <n>            reorganize --hash: skip a host owning over n items');
   Writeln('  --json                     Machine-readable output (status/list/details/');
   Writeln('                             verify/blacklist/allow/relocate/forget)');
@@ -2367,8 +2369,9 @@ var
   i, idx, p, k, t, movedHere, remaining, ownedCount: LongInt;
   foldered, filesMoved, multiHosts, skippedFiles, maxOwned: LongInt;
   tierBMoved, tierBHosts, tierBUnmatched, skippedBig, aMoved: LongInt;
+  crossMoved, crossScanned: LongInt;
   verb, recSeen: string;
-  dryRun, useHash, authed: boolean;
+  dryRun, useHash, crossHost, authed: boolean;
 
   procedure FillItem(n: LongInt);
   begin
@@ -2438,6 +2441,48 @@ var
     Result := true;
   end;
 
+  { Cross-host pass: match every remaining loose file under any <user>.itch.io
+    host folder against the stored upload hashes of ANY owned item, and move it
+    under that item's real slug folder. This catches a file sitting in a folder
+    whose name no longer matches the item's host (a creator renamed their itch
+    username), which the per-host pass cannot see. Offline: it reads only stored
+    hashes, so run index --hashes first. }
+  procedure CrossHostPass;
+  var
+    dr: TSearchRec;
+    hDir, fmd5, oId, oUrl, slug, tDir: string;
+    oItem: TCollectionItem;
+    j: LongInt;
+  begin
+    if FindFirst(IncludeTrailingPathDelimiter(dir) + '*.itch.io',
+      faDirectory, dr) <> 0 then
+      exit;
+    try
+      repeat
+        if ((dr.Attr and faDirectory) = 0) or (dr.Name = '.') or (dr.Name = '..') then
+          continue;
+        hDir := IncludeTrailingPathDelimiter(dir) + dr.Name;
+        GatherLoose(hDir);
+        for j := 0 to loose.Count - 1 do begin
+          Inc(crossScanned);
+          fmd5 := LowerCase(Md5File(IncludeTrailingPathDelimiter(hDir) + loose[j]));
+          if not index.FindUploadOwner(backendName, 'md5', fmd5, oId, oUrl) then
+            continue;
+          oItem := Default(TCollectionItem);
+          oItem.pageUrl := oUrl;
+          slug := SanitizeSubdir(backend.ItemSubdir(oItem));
+          if slug = '' then
+            continue;
+          tDir := IncludeTrailingPathDelimiter(dir) + slug;
+          if MoveLoose(hDir, tDir, loose[j]) then
+            Inc(crossMoved);
+        end;
+      until FindNext(dr) <> 0;
+    finally
+      FindClose(dr);
+    end;
+  end;
+
 begin
   backendName := ArgValue('--backend', '');
   backendClass := FindBackend(backendName);
@@ -2453,13 +2498,15 @@ begin
   if not DirectoryExists(dir) then
     raise EMagicError.CreateFmt('Directory "%s" not found.', [dir]);
   dryRun := HasFlag('--dry-run');
-  useHash := HasFlag('--hash');
+  crossHost := HasFlag('--hash-cross-host');
+  { Cross-host matching builds on the per-host hash pass. }
+  useHash := HasFlag('--hash') or crossHost;
   maxOwned := StrToIntDef(ArgValue('--max-owned', ''), 0);
 
   hosts := TStringList.Create;
   loose := TStringList.Create;
-  { The hash pass resolves files from the store, so it needs an authenticated
-    session; the offline pass needs only the index. }
+  { The hash pass may resolve files from the store, so it needs an authenticated
+    session; the plain pass needs only the index. }
   if useHash then begin
     s := OpenSession;
     index := s.index;
@@ -2508,6 +2555,8 @@ begin
     tierBHosts := 0;
     tierBUnmatched := 0;
     skippedBig := 0;
+    crossMoved := 0;
+    crossScanned := 0;
 
     for idx := 0 to hosts.Count - 1 do begin
       i := PtrInt(hosts.Objects[idx]) - 1;
@@ -2643,6 +2692,11 @@ begin
         end;
     end;
 
+    if crossHost then begin
+      gLog.Info('Cross-host pass: matching remaining loose files by hash...');
+      CrossHostPass;
+    end;
+
     aMoved := filesMoved - tierBMoved;
     if dryRun then
       verb := 'Would fold'
@@ -2658,6 +2712,10 @@ begin
         + '%d host(s) skipped over --max-owned.',
         [verb, filesMoved, aMoved, tierBMoved, tierBHosts, tierBUnmatched,
          skippedBig]));
+    if crossHost then
+      gLog.Info(Format('%s %d more file(s) to the owning item''s folder by '
+        + 'cross-host hash match (%d loose file(s) scanned).',
+        [verb, crossMoved, crossScanned]));
     if skippedFiles > 0 then
       gLog.Info(Format('%d file(s) left in place (a file of that name already '
         + 'existed in the target).', [skippedFiles]));

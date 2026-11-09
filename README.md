@@ -429,6 +429,19 @@ files are few.
 magicdl reorganize --backend itchio --hash --max-owned 700 ~/itch-archive
 ```
 
+The per-host passes only match a loose file against items on the *same* host
+folder. A folder whose name no longer matches the item's host is invisible to
+them, which happens when a creator renames their itch username: the old archive
+folder (say `oldname.itch.io/`) holds files whose items now live under
+`newname.itch.io/`. `--hash-cross-host` handles that: it matches each remaining
+loose file against the stored hashes of every owned item, on any host, and moves
+it under that item's real slug folder. It is offline and reads only the stored
+hashes, so run `index --hashes` first.
+
+```
+magicdl reorganize --backend itchio --hash-cross-host ~/itch-archive
+```
+
 Files are moved, never copied or deleted, and a file is left in place if one of
 the same name already sits in the target folder.
 

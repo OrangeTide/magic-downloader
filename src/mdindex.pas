@@ -180,6 +180,12 @@ type
     function UploadHashesForItem(const backend, backendId,
       hashAlgo: string): TStringArray;
 
+    {** Finds the item that owns a stored upload with this hash, across every
+      host (for cross-host reorganize). Returns its backend_id and page_url;
+      false when no stored upload matches. }
+    function FindUploadOwner(const backend, hashAlgo, hash: string;
+      out backendId, pageUrl: string): boolean;
+
     function CountItems(const backend: string): LongInt;
 
     {** Distinct backend names present in the index, ordered. }
@@ -809,6 +815,35 @@ begin
       UploadHashesForItem[n] := LowerCase(q.Fields[0].AsString);
       Inc(n);
       q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.FindUploadOwner(const backend, hashAlgo, hash: string;
+  out backendId, pageUrl: string): boolean;
+var
+  q: TSQLQuery;
+begin
+  backendId := '';
+  pageUrl := '';
+  Result := false;
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT i.backend_id, i.page_url FROM uploads u JOIN items i ' +
+      'ON u.item_id=i.id WHERE i.backend=:backend AND u.hash_algo=:algo ' +
+      'AND u.hash=:hash LIMIT 1';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('algo').AsString := hashAlgo;
+    q.ParamByName('hash').AsString := LowerCase(hash);
+    q.Open;
+    if not q.EOF then begin
+      backendId := q.Fields[0].AsString;
+      pageUrl := q.Fields[1].AsString;
+      Result := true;
     end;
     q.Close;
   finally

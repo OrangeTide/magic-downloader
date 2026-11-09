@@ -137,8 +137,16 @@ the store on the spot and caches the hashes, so the next run is offline.
 skips a host that owns more than
 .I n
 items, to avoid resolving a large shared host. Slug subfolders and other
-directories are left alone. Only itch.io,
-which imports by path, supports this. Use
+directories are left alone.
+.IP
+.B \-\-hash\-cross\-host
+goes further: it matches each remaining loose file against the stored hashes of
+every owned item, on any host, and moves it under that item's real slug folder.
+This recovers files sitting in a folder whose name no longer matches the item's
+host, for example when a creator renamed their itch username, which the per-host
+pass cannot see. It is offline and uses only stored hashes, so run
+.B index \-\-hashes
+first. Only itch.io, which imports by path, supports this. Use
 .B \-\-dry\-run
 to review the moves first.
 .TP
@@ -358,6 +366,15 @@ the store\-side upload hashes (otherwise such hosts are left for a later run).
 The hashes come from
 .BR "index \-\-hashes" ;
 without them the pass resolves from the store on the spot and caches the result.
+.TP
+.B \-\-hash\-cross\-host
+Match each remaining loose file against the stored hashes of every owned item on
+any host, and move it under that item's real slug folder. Recovers files under a
+folder whose name no longer matches the item's host (a renamed itch username).
+Implies
+.BR \-\-hash ,
+is offline, and needs
+.BR "index \-\-hashes" .
 .TP
 .BI "\-\-max\-owned " n
 With
