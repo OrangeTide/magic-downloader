@@ -1187,6 +1187,30 @@ begin
     [idx + 1, total, total - (idx + 1), ItemDisplayName(item)]));
 end;
 
+{** Syncs one item, turning a per-item failure (a 403 on a session-gated or
+  no-longer-owned item, a bad file) into a logged skip and a counted failure
+  instead of aborting the whole run. The item keeps its state, so a later run
+  retries it. Returns true when the item fetched something. }
+function TrySyncItem(backend: TMagicBackend; const ctx: TMagicContext;
+  const backendName: string; const item: TCollectionItem;
+  withCovers: boolean; var failed: LongInt): boolean;
+begin
+  Result := false;
+  try
+    Result := SyncItem(backend, ctx, backendName, item, withCovers);
+  except
+    on E: EMagicError do begin
+      gLog.Warn(Format('skip "%s": %s', [ItemDisplayName(item), E.Message]));
+      Inc(failed);
+    end;
+    on E: Exception do begin
+      gLog.Warn(Format('skip "%s": %s (%s)',
+        [ItemDisplayName(item), E.Message, E.ClassName]));
+      Inc(failed);
+    end;
+  end;
+end;
+
 procedure CmdSync;
 var
   backendClass: TMagicBackendClass;
@@ -1199,7 +1223,7 @@ var
   only: TStringArray;
   detail: TItemDetail;
   item: TCollectionItem;
-  i, fetched: LongInt;
+  i, fetched, failed: LongInt;
   withCovers: boolean;
   backendName, scope: string;
 begin
@@ -1225,6 +1249,7 @@ begin
         [backendName, ForAccount(backend)]));
 
       fetched := 0;
+      failed := 0;
       if Length(only) > 0 then begin
         { Targeted sync: resolve the named items from the index, no full listing. }
         gLog.Info(Format('Syncing %d item(s) from the index...', [Length(only)]));
@@ -1241,7 +1266,7 @@ begin
           item.itemType := detail.kind;
           item.pageUrl := detail.pageUrl;
           SyncProgress(i, Length(only), item);
-          if SyncItem(backend, ctx, backendName, item, withCovers) then
+          if TrySyncItem(backend, ctx, backendName, item, withCovers, failed) then
             Inc(fetched);
         end;
       end
@@ -1252,7 +1277,7 @@ begin
         gLog.Info(Format('%d item(s) in %s.', [Length(items), SubsetLabel(scope)]));
         for i := 0 to High(items) do begin
           SyncProgress(i, Length(items), items[i]);
-          if SyncItem(backend, ctx, backendName, items[i], withCovers) then
+          if TrySyncItem(backend, ctx, backendName, items[i], withCovers, failed) then
             Inc(fetched);
         end;
       end
@@ -1272,7 +1297,7 @@ begin
           item.itemType := filtered[i].kind;
           item.pageUrl := filtered[i].pageUrl;
           SyncProgress(i, Length(filtered), item);
-          if SyncItem(backend, ctx, backendName, item, withCovers) then
+          if TrySyncItem(backend, ctx, backendName, item, withCovers, failed) then
             Inc(fetched);
         end;
       end
@@ -1282,12 +1307,16 @@ begin
         gLog.Info(Format('%d items in collection.', [Length(items)]));
         for i := 0 to High(items) do begin
           SyncProgress(i, Length(items), items[i]);
-          if SyncItem(backend, ctx, backendName, items[i], withCovers) then
+          if TrySyncItem(backend, ctx, backendName, items[i], withCovers, failed) then
             Inc(fetched);
         end;
       end;
       gLog.EndProgress;
-      gLog.Info(Format('Sync done: %d fetched.', [fetched]));
+      if failed > 0 then
+        gLog.Info(Format('Sync done: %d fetched, %d skipped after errors '
+          + '(see warnings above; re-run to retry them).', [fetched, failed]))
+      else
+        gLog.Info(Format('Sync done: %d fetched.', [fetched]));
     finally
       backend.Free;
     end;
