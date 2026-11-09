@@ -74,6 +74,7 @@ begin
   if fMinLevel <= llDebug then begin
     ClearProgress;
     Writeln('[debug] ', msg);
+    Flush(Output);
   end;
 end;
 
@@ -82,6 +83,7 @@ begin
   if fMinLevel <= llInfo then begin
     ClearProgress;
     Writeln(msg);
+    Flush(Output);
   end;
 end;
 
@@ -90,6 +92,7 @@ begin
   if fMinLevel <= llWarn then begin
     ClearProgress;
     Writeln('warning: ', msg);
+    Flush(Output);
   end;
 end;
 
@@ -98,6 +101,7 @@ begin
   if fMinLevel <= llError then begin
     ClearProgress;
     Writeln(StdErr, 'error: ', msg);
+    Flush(StdErr);
   end;
 end;
 
