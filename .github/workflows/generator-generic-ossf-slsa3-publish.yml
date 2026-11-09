@@ -1,0 +1,88 @@
+# This workflow uses actions that are not certified by GitHub. They are
+# provided by a third party and governed by separate terms of service, privacy
+# policy, and support documentation.
+#
+# It builds the release tarball, then generates a SLSA3 provenance attestation
+# for it with the OpenSSF generic generator. See https://slsa.dev for details.
+
+name: SLSA generic generator
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions: read-all
+
+jobs:
+  build:
+    name: Build and hash
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write  # Upload the tarball to the release.
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+      tarball: ${{ steps.build.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Full history and tags so `git describe` sets the version.
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc fp-units-fcl fp-units-db fpc-source
+
+      - name: Build release tarball
+        id: build
+        run: |
+          set -euo pipefail
+          make
+          make man
+
+          # Derive the version the same way the Makefile does, for the names.
+          desc=$(git describe --tags --dirty --match 'v*' 2>/dev/null || true)
+          version=${desc#v}
+          [ -n "$version" ] || version=$(sed -n 's/^PROJ_VERSION *:= *//p' version.mk)
+
+          name="magicdl-${version}-linux-x86_64"
+          mkdir -p "dist/${name}"
+          cp build/magicdl "dist/${name}/"
+          cp build/magicdl.1 "dist/${name}/"
+          cp README.md "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+
+          echo "tarball=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Generate subject for provenance
+        id: hash
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "hashes=$(sha256sum *.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.build.outputs.tarball }}
+          path: dist/${{ steps.build.outputs.tarball }}
+          retention-days: 7
+
+      - name: Attach tarball to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "dist/${{ steps.build.outputs.tarball }}"
+
+  provenance:
+    name: Generate SLSA3 provenance
+    needs: [build]
+    permissions:
+      actions: read    # Read the workflow path.
+      id-token: write  # Sign the provenance.
+      contents: write  # Attach the provenance to the release.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: true  # Attach the .intoto.jsonl provenance to the release.
