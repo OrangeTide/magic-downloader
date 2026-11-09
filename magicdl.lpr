@@ -108,7 +108,8 @@ begin
   Writeln('  list-backends              List available backends');
   Writeln('  bundles                    List owned bundles to pass to --bundle (itchio)');
   Writeln('  creators                   List creators in the index to pass to --creator');
-  Writeln('  index                      Index a collection (no downloads)');
+  Writeln('  index                      Index a collection (no downloads); --hashes');
+  Writeln('                             also stores store-side file hashes (itchio)');
   Writeln('  sync [<id>...]             Download items: full listing, given ids,');
   Writeln('                             or --from-index to use the stored index');
   Writeln('  verify                     Check downloaded files, relocate moved ones');
@@ -167,7 +168,10 @@ begin
   Writeln('  --out-file <path>          Write manifest here instead of stdout');
   Writeln('  --html                     Manifest as HTML (default: Markdown)');
   Writeln('  --no-check                 Manifest without download checkboxes');
+  Writeln('  --hashes                   index: also fetch and store store-side file');
+  Writeln('                             hashes, so reorganize --hash runs offline (itchio)');
   Writeln('  --hash                     reorganize: also sort multi-owner hosts by hash');
+  Writeln('                             (uses stored hashes; falls back to the store)');
   Writeln('  --max-owned <n>            reorganize --hash: skip a host owning over n items');
   Writeln('  --json                     Machine-readable output (status/list/details/');
   Writeln('                             verify/blacklist/allow/relocate/forget)');
@@ -789,6 +793,51 @@ begin
   end;
 end;
 
+{** Resolves each item's store-side files and records their hashes in the index,
+  so reorganize --hash (and a future offline check) can match without contacting
+  the store. This is paced network work, done once: items whose hashes are
+  already stored are skipped unless refresh is set. }
+procedure RecordItemHashes(backend: TMagicBackend; index: TMagicIndex;
+  const backendName: string; const items: TCollectionItemArray;
+  refresh: boolean);
+var
+  i, t, recorded: LongInt;
+  targets: TDownloadTargetArray;
+  availability: TAvailability;
+  seen: string;
+begin
+  recorded := 0;
+  for i := 0 to High(items) do begin
+    gLog.Progress(Format('Hashing: %d/%d items...', [i + 1, Length(items)]));
+    if (not refresh) and index.HasUploads(backendName, items[i].id) then
+      continue;
+    try
+      targets := backend.ResolveFiles(items[i], availability);
+    except
+      on E: Exception do begin
+        gLog.Warn(Format('  resolve failed for %s: %s',
+          [items[i].id, E.Message]));
+        continue;
+      end;
+    end;
+    if availability <> avAvailable then
+      continue;
+    seen := NowIsoUtc;
+    for t := 0 to High(targets) do
+      if (targets[t].hash <> '') and (targets[t].hashAlgo <> '') then begin
+        index.RecordUpload(backendName, items[i].id, targets[t].versionKey,
+          targets[t].name, targets[t].format, 0,
+          targets[t].hash, targets[t].hashAlgo, seen);
+        Inc(recorded);
+      end;
+    { Persist each item as it is resolved, so an interrupted run keeps its
+      progress and a re-run skips what is already recorded. }
+    index.Commit;
+  end;
+  gLog.EndProgress;
+  gLog.Info(Format('Recorded hashes for %d file(s).', [recorded]));
+end;
+
 procedure CmdIndex;
 var
   backendClass: TMagicBackendClass;
@@ -805,6 +854,9 @@ begin
     backend := backendClass.Create(ctx);
     try
       scope := ScopeArg(backend, backendName);
+      if HasFlag('--hashes') and not backend.ReportsFileHashes then
+        raise EMagicError.CreateFmt('Backend "%s" reports no file hashes, so '
+          + '--hashes has nothing to record.', [backendName]);
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
       if scope <> '' then begin
@@ -818,6 +870,12 @@ begin
       end;
       gLog.Info(Format('Indexed %d items (%d total in database).',
         [Length(items), s.index.CountItems(backendName)]));
+      if HasFlag('--hashes') then begin
+        gLog.Info(Format('Resolving store-side hashes for %d item(s)...',
+          [Length(items)]));
+        RecordItemHashes(backend, s.index, backendName, items,
+          HasFlag('--refresh'));
+      end;
     finally
       backend.Free;
     end;
@@ -2039,6 +2097,8 @@ begin
   gLog.Info(Format('  superseded:    %d', [st.superseded]));
   gLog.Info(Format('  imported:      %d', [st.imported]));
   gLog.Info(Format('  versions:      %d', [st.versions]));
+  gLog.Info(Format('  hashed:        %d items (store-side hashes stored)',
+    [st.hashedItems]));
   gLog.Info(Format('  downloaded:    %d items (current version)',
     [st.downloadedItems]));
   gLog.Info(Format('  files:         %d present, %d missing',
@@ -2085,6 +2145,7 @@ begin
   Result.Add('superseded', st.superseded);
   Result.Add('imported', st.imported);
   Result.Add('versions', st.versions);
+  Result.Add('hashed_items', st.hashedItems);
   Result.Add('downloaded_items', st.downloadedItems);
 
   files := TJSONObject.Create;
@@ -2300,13 +2361,14 @@ var
   looseHash: TStringArray;
   placed: array of boolean;
   targets: TDownloadTargetArray;
+  usableHashes: TStringArray;
   availability: TAvailability;
   f: TItemFilter;
   i, idx, p, k, t, movedHere, remaining, ownedCount: LongInt;
   foldered, filesMoved, multiHosts, skippedFiles, maxOwned: LongInt;
   tierBMoved, tierBHosts, tierBUnmatched, skippedBig, aMoved: LongInt;
-  verb: string;
-  dryRun, useHash: boolean;
+  verb, recSeen: string;
+  dryRun, useHash, authed: boolean;
 
   procedure FillItem(n: LongInt);
   begin
@@ -2410,15 +2472,12 @@ begin
     ctx.index := index;
   end;
   backend := backendClass.Create(ctx);
+  authed := false;
   try
     if not backend.ImportsByPath then
       raise EMagicError.CreateFmt('Backend "%s" organizes by name, not by a '
         + 'per-item folder; reorganize supports path-based backends (itchio).',
         [backendName]);
-    if useHash then begin
-      LoadCookies(backendClass, s.cookies);
-      backend.Authenticate;
-    end;
 
     { Group indexed items by host, the first segment of ItemSubdir. Objects[]
       holds the sole item's index + 1, or 0 once a second item shares the host. }
@@ -2524,22 +2583,47 @@ begin
         if (p <= 1) or (Copy(rel, 1, p - 1) <> host) then
           continue;
         slugRel := rel;
-        try
-          targets := backend.ResolveFiles(citem, availability);
-        except
-          on E: Exception do begin
-            gLog.Warn(Format('  resolve failed for %s: %s',
-              [citem.id, E.Message]));
-            continue;
+
+        { Prefer hashes stored by `index --hashes` (offline). Resolve from the
+          store only when the item has none recorded, and cache what comes back
+          so a later run stays offline. Authenticate lazily, so a fully-cached
+          run makes no network requests at all. }
+        usableHashes := index.UploadHashesForItem(backendName, citem.id, 'md5');
+        if Length(usableHashes) = 0 then begin
+          if not authed then begin
+            LoadCookies(backendClass, s.cookies);
+            backend.Authenticate;
+            authed := true;
           end;
-        end;
-        if availability <> avAvailable then
-          continue;
-        targetDir := IncludeTrailingPathDelimiter(dir) + slugRel;
-        for t := 0 to High(targets) do begin
-          if (targets[t].hashAlgo <> 'md5') or (targets[t].hash = '') then
+          try
+            targets := backend.ResolveFiles(citem, availability);
+          except
+            on E: Exception do begin
+              gLog.Warn(Format('  resolve failed for %s: %s',
+                [citem.id, E.Message]));
+              continue;
+            end;
+          end;
+          if availability <> avAvailable then
             continue;
-          th := LowerCase(targets[t].hash);
+          recSeen := NowIsoUtc;
+          SetLength(usableHashes, 0);
+          for t := 0 to High(targets) do
+            if (targets[t].hash <> '') and (targets[t].hashAlgo <> '') then begin
+              index.RecordUpload(backendName, citem.id, targets[t].versionKey,
+                targets[t].name, targets[t].format, 0,
+                targets[t].hash, targets[t].hashAlgo, recSeen);
+              if targets[t].hashAlgo = 'md5' then begin
+                SetLength(usableHashes, Length(usableHashes) + 1);
+                usableHashes[High(usableHashes)] := LowerCase(targets[t].hash);
+              end;
+            end;
+          index.Commit;
+        end;
+
+        targetDir := IncludeTrailingPathDelimiter(dir) + slugRel;
+        for t := 0 to High(usableHashes) do begin
+          th := usableHashes[t];
           for k := 0 to loose.Count - 1 do
             if (not placed[k]) and (looseHash[k] = th) then begin
               if MoveLoose(hostDir, targetDir, loose[k]) then begin

@@ -107,6 +107,11 @@ type
       Called after Authenticate. }
     function ListScopes: TScopeInfoArray; virtual;
 
+    {** True when ResolveFiles puts a usable per-file hash on its targets, so
+      `index --hashes` can record a store-side hash catalog worth matching
+      against. Default: false (most stores report no per-file hash). }
+    function ReportsFileHashes: boolean; virtual;
+
     {** Resolves the cover image URL for an item, or '' when none exists. }
     function ResolveCoverUrl(const item: TCollectionItem): string; virtual; abstract;
 
@@ -180,6 +185,11 @@ begin
   Result := nil;
   raise EMagicError.CreateFmt(
     'Backend "%s" does not support --bundle or --creator.', [BackendName]);
+end;
+
+function TMagicBackend.ReportsFileHashes: boolean;
+begin
+  ReportsFileHashes := false;
 end;
 
 function TMagicBackend.ListScopes: TScopeInfoArray;

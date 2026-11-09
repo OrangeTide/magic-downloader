@@ -40,7 +40,13 @@ Reads the index only, so run
 first.
 .TP
 .B index
-Fetch the list of owned content and store it, without downloading files.
+Fetch the list of owned content and store it, without downloading files. With
+.B \-\-hashes
+it also resolves each item's files from the store and records their hashes in
+the index, so
+.B reorganize \-\-hash
+can match loose files offline. That pass is paced and resumable: it skips items
+whose hashes are already stored and commits after each one.
 .TP
 .BI "sync " "[id...]"
 Download content. With no arguments it lists the whole collection from the
@@ -120,14 +126,18 @@ This pass is offline.
 With
 .B \-\-hash
 it also handles a host that owns several items, where a loose file cannot be
-placed by path alone. It resolves each owned item's files from the store to
-learn their hashes, hashes the loose files, and moves each under the slug whose
-upload hash it matches. A loose file matching no upload is left in place. This
-costs one store request per owned item on such a host, so
+placed by path alone. It matches each loose file's hash against the store-side
+upload hashes and moves it under the slug whose upload it matches. A loose file
+matching no upload is left in place. The upload hashes come from the index:
+populate them once with
+.B index \-\-hashes
+and this pass runs entirely offline. Without them it resolves a host's items from
+the store on the spot and caches the hashes, so the next run is offline.
 .BI \-\-max\-owned " n"
 skips a host that owns more than
 .I n
-items. Slug subfolders and other directories are left alone. Only itch.io,
+items, to avoid resolving a large shared host. Slug subfolders and other
+directories are left alone. Only itch.io,
 which imports by path, supports this. Use
 .B \-\-dry\-run
 to review the moves first.
@@ -331,19 +341,30 @@ Write the manifest as HTML rather than Markdown.
 .TP
 .B \-\-no\-check
 Omit the download checkboxes and the download tally.
+.SS index
+.TP
+.B \-\-hashes
+Also resolve each item's files from the store and record their hashes in the
+index (itch.io), so
+.B reorganize \-\-hash
+can match offline. Resumable; combine with
+.B \-\-refresh
+to re\-resolve items whose hashes are already stored.
 .SS reorganize
 .TP
 .B \-\-hash
 Also sort the loose files of multi\-owner hosts by matching their hashes against
-the store's uploads (otherwise such hosts are left for a later run).
+the store\-side upload hashes (otherwise such hosts are left for a later run).
+The hashes come from
+.BR "index \-\-hashes" ;
+without them the pass resolves from the store on the spot and caches the result.
 .TP
 .BI "\-\-max\-owned " n
 With
 .BR \-\-hash ,
 skip a host that owns more than
 .I n
-items, so a host with many owned items and few loose files does not cost a
-request per item. Unset or 0 means no limit.
+items, so a large shared host is not resolved. Unset or 0 means no limit.
 .SS Output and pacing
 .TP
 .B \-\-json

@@ -26,7 +26,7 @@ uses
   Classes, SysUtils, DateUtils, sqldb, sqlite3conn, db, mdtypes;
 
 const
-  SCHEMA_VERSION = 4;
+  SCHEMA_VERSION = 5;
 
   { Item lifecycle status values. }
   ITEM_ACTIVE      = 'active';
@@ -42,6 +42,7 @@ type
     hidden, blacklisted, superseded, imported: LongInt;
     versions: LongInt;
     downloadedItems: LongInt;   { items with a present file for the current version }
+    hashedItems: LongInt;       { items with stored store-side upload hashes }
     filesPresent, filesMissing: LongInt;
     bytesPresent: Int64;        { total size of all present files }
   end;
@@ -109,6 +110,7 @@ type
     fConn: TSQLite3Connection;
     fTrans: TSQLTransaction;
     procedure EnsureSchema;
+    procedure CreateUploadsTable;
     function NewQuery: TSQLQuery;
     function SchemaVersion: LongInt;
   public
@@ -162,6 +164,21 @@ type
       format is the type hint). }
     procedure RecordFile(const backend, backendId, versionKey, name, format,
       path: string; size: Int64; const sha256, downloadedAt: string);
+
+    {** Records one store-side upload (an item's downloadable file and its
+      expected hash), from `index --hashes`. Does not require the item to be
+      downloaded. Upserts on (item, version, name). }
+    procedure RecordUpload(const backend, backendId, versionKey, name,
+      format: string; size: Int64; const hash, hashAlgo, resolvedAt: string);
+
+    {** True when the item has at least one recorded upload, so its hashes were
+      already resolved and need not be fetched again. }
+    function HasUploads(const backend, backendId: string): boolean;
+
+    {** The expected upload hashes recorded for an item in the given algorithm
+      (lowercased), for offline hash matching. Empty when none are stored. }
+    function UploadHashesForItem(const backend, backendId,
+      hashAlgo: string): TStringArray;
 
     function CountItems(const backend: string): LongInt;
 
@@ -276,10 +293,19 @@ begin
   if uv >= SCHEMA_VERSION then
     exit;
 
-  { v3 -> v4 only adds items.imported_path, so migrate in place to keep the
-    indexed data rather than dropping it. }
-  if uv = 3 then begin
-    fConn.ExecuteDirect('ALTER TABLE items ADD COLUMN imported_path TEXT');
+  { v3+ migrate in place to keep the indexed data rather than dropping it:
+    v3 -> v4 adds items.imported_path; v4 -> v5 adds the uploads table (the
+    store-side file hashes, so reorganize --hash can match offline). The steps
+    are sequential so a v3 database reaches v5. }
+  if (uv = 3) or (uv = 4) then begin
+    if uv = 3 then begin
+      fConn.ExecuteDirect('ALTER TABLE items ADD COLUMN imported_path TEXT');
+      uv := 4;
+    end;
+    if uv = 4 then begin
+      CreateUploadsTable;
+      uv := 5;
+    end;
     fConn.ExecuteDirect('PRAGMA user_version = ' + IntToStr(SCHEMA_VERSION));
     fTrans.Commit;
     exit;
@@ -289,6 +315,7 @@ begin
     schema is dropped and recreated rather than migrated. Re-running index or
     sync repopulates it. Children are dropped before parents for the foreign
     keys. }
+  fConn.ExecuteDirect('DROP TABLE IF EXISTS uploads');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS files');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS versions');
   fConn.ExecuteDirect('DROP TABLE IF EXISTS items');
@@ -344,9 +371,32 @@ begin
   fConn.ExecuteDirect(
     'CREATE INDEX ix_items_backend_status ON items(backend, status)');
   fConn.ExecuteDirect('CREATE INDEX ix_files_sha256 ON files(sha256)');
+  CreateUploadsTable;
 
   fConn.ExecuteDirect('PRAGMA user_version = ' + IntToStr(SCHEMA_VERSION));
   fTrans.Commit;
+end;
+
+{** Creates the uploads table: the store-side catalog of an item's downloadable
+  files and their expected hashes, independent of whether they are downloaded.
+  `index --hashes` fills it, and reorganize --hash matches loose files against it
+  without contacting the store. version_key is stored as text (not a versions
+  foreign key), since an undownloaded item has no versions row. }
+procedure TMagicIndex.CreateUploadsTable;
+begin
+  fConn.ExecuteDirect(
+    'CREATE TABLE uploads (' +
+    '  id            INTEGER PRIMARY KEY,' +
+    '  item_id       INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,' +
+    '  version_key   TEXT NOT NULL,' +
+    '  name          TEXT NOT NULL,' +
+    '  format        TEXT,' +
+    '  size          INTEGER,' +
+    '  hash          TEXT,' +
+    '  hash_algo     TEXT,' +
+    '  resolved_at   TEXT NOT NULL,' +
+    '  UNIQUE (item_id, version_key, name))');
+  fConn.ExecuteDirect('CREATE INDEX ix_uploads_hash ON uploads(hash)');
 end;
 
 procedure TMagicIndex.UpsertItem(const backend: string;
@@ -686,6 +736,86 @@ begin
   end;
 end;
 
+procedure TMagicIndex.RecordUpload(const backend, backendId, versionKey, name,
+  format: string; size: Int64; const hash, hashAlgo, resolvedAt: string);
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'INSERT INTO uploads (item_id, version_key, name, format, size, hash, ' +
+      ' hash_algo, resolved_at) ' +
+      'VALUES ((SELECT id FROM items ' +
+      '         WHERE backend=:backend AND backend_id=:backend_id), ' +
+      ' :vk, :name, :fmt, :size, :hash, :algo, :rt) ' +
+      'ON CONFLICT(item_id, version_key, name) DO UPDATE SET ' +
+      '  format=excluded.format, size=excluded.size, hash=excluded.hash, ' +
+      '  hash_algo=excluded.hash_algo, resolved_at=excluded.resolved_at';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.ParamByName('vk').AsString := versionKey;
+    q.ParamByName('name').AsString := name;
+    q.ParamByName('fmt').AsString := format;
+    q.ParamByName('size').AsLargeInt := size;
+    q.ParamByName('hash').AsString := LowerCase(hash);
+    q.ParamByName('algo').AsString := hashAlgo;
+    q.ParamByName('rt').AsString := resolvedAt;
+    q.ExecSQL;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.HasUploads(const backend, backendId: string): boolean;
+var
+  q: TSQLQuery;
+begin
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT 1 FROM uploads u JOIN items i ON u.item_id=i.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id LIMIT 1';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.Open;
+    HasUploads := not q.EOF;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
+function TMagicIndex.UploadHashesForItem(const backend, backendId,
+  hashAlgo: string): TStringArray;
+var
+  q: TSQLQuery;
+  n: LongInt;
+begin
+  UploadHashesForItem := nil;
+  q := NewQuery;
+  try
+    q.SQL.Text :=
+      'SELECT u.hash FROM uploads u JOIN items i ON u.item_id=i.id ' +
+      'WHERE i.backend=:backend AND i.backend_id=:backend_id ' +
+      '  AND u.hash_algo=:algo AND u.hash IS NOT NULL AND u.hash<>''''';
+    q.ParamByName('backend').AsString := backend;
+    q.ParamByName('backend_id').AsString := backendId;
+    q.ParamByName('algo').AsString := hashAlgo;
+    q.Open;
+    n := 0;
+    while not q.EOF do begin
+      SetLength(UploadHashesForItem, n + 1);
+      UploadHashesForItem[n] := LowerCase(q.Fields[0].AsString);
+      Inc(n);
+      q.Next;
+    end;
+    q.Close;
+  finally
+    q.Free;
+  end;
+end;
+
 function TMagicIndex.CountItems(const backend: string): LongInt;
 var
   q: TSQLQuery;
@@ -783,6 +913,9 @@ begin
     'SELECT COUNT(DISTINCT i.id) FROM items i ' +
     'JOIN versions v ON v.item_id=i.id JOIN files f ON f.version_id=v.id' +
     IB + ' AND v.is_current=1 AND f.state=''present''');
+  Result.hashedItems := ScalarCount(
+    'SELECT COUNT(DISTINCT i.id) FROM items i ' +
+    'JOIN uploads u ON u.item_id=i.id' + IB);
   Result.bytesPresent := ScalarBytes(
     'SELECT CAST(COALESCE(SUM(f.size),0) AS TEXT) FROM files f ' +
     'JOIN versions v ON f.version_id=v.id JOIN items i ON v.item_id=i.id' +

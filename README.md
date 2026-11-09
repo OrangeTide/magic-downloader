@@ -400,13 +400,30 @@ magicdl reorganize --backend itchio ~/itch-archive
 ```
 
 A host that owns several items is left alone by default, since a loose file
-there cannot be placed by path. `--hash` handles those too: it resolves each
-owned item's files from the store to learn their MD5 hashes, hashes the loose
-files, and moves each under the slug whose upload hash it matches. A file that
-matches no upload is left where it is. This costs one store request per owned
-item on such a host, so `--max-owned <n>` skips a host that owns more than `n`
-items, keeping a host with many items and few loose files from costing a request
-per item.
+there cannot be placed by path. `--hash` handles those too: it matches each loose
+file's MD5 against the store-side upload hashes and moves it under the slug whose
+upload it matches. A file that matches no upload is left where it is.
+
+Those upload hashes come from the index. Populate them first with `index
+--hashes`, which resolves each item's files once and stores their hashes:
+
+```
+magicdl index --backend itchio --hashes          # one paced pass, stored in the index
+magicdl reorganize --backend itchio --hash ~/itch-archive   # then runs offline
+```
+
+`index --hashes` skips items whose hashes are already stored and commits after
+each one, so it is resumable: an interrupted run picks up where it left off, and
+re-running only resolves what is new. `status` shows the progress as the `hashed`
+count. The resolve is paced network work and itch.io rate-limits it, so it is
+slow the first time but done once. `--refresh` re-resolves stored items to pick
+up a store-side re-upload.
+
+If you run `reorganize --hash` without a prior `index --hashes`, it still works:
+it resolves a host's items from the store on the spot and caches the hashes in
+the index, so the next run is offline. `--max-owned <n>` skips a host that owns
+more than `n` items, useful to avoid resolving a huge shared host whose loose
+files are few.
 
 ```
 magicdl reorganize --backend itchio --hash --max-owned 700 ~/itch-archive

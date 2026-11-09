@@ -68,6 +68,7 @@ type
     function SupportsScope: boolean; override;
     function ListScope(const scopeRef: string): TCollectionItemArray; override;
     function ListScopes: TScopeInfoArray; override;
+    function ReportsFileHashes: boolean; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
     function ResolveFiles(const item: TCollectionItem;
       out availability: TAvailability): TDownloadTargetArray; override;
@@ -274,6 +275,12 @@ end;
 function TItchIoBackend.SupportsScope: boolean;
 begin
   SupportsScope := true;
+end;
+
+function TItchIoBackend.ReportsFileHashes: boolean;
+begin
+  { itch.io's uploads API reports each file's MD5. }
+  ReportsFileHashes := true;
 end;
 
 {** Extracts the numeric bundle id from a scope reference: an itch.io bundle
