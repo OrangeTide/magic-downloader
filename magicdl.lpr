@@ -154,6 +154,8 @@ begin
   Writeln('                             ...); multi-file backends keep only these');
   Writeln('                             types (e.g. pdf,epub). Unset: flac / all');
   Writeln('  --covers                   Also download cover images (sync)');
+  Writeln('  --max-failures <n>         Stop sync after n consecutive download');
+  Writeln('                             failures (default 3; 0 disables)');
   Writeln('  --from-index               Sync from the stored index, no API listing');
   Writeln('  --rehash                   Re-hash present files to check integrity (verify)');
   Writeln('  --rescan                   Relocate moved files by content hash (verify)');
@@ -1187,26 +1189,33 @@ begin
     [idx + 1, total, total - (idx + 1), ItemDisplayName(item)]));
 end;
 
+type
+  {** The result of trying to sync one item: it fetched files, it was skipped
+    with nothing to do (already present, unavailable, blacklisted), or the
+    download failed. }
+  TSyncOutcome = (soFetched, soSkipped, soFailed);
+
 {** Syncs one item, turning a per-item failure (a 403 on a session-gated or
-  no-longer-owned item, a bad file) into a logged skip and a counted failure
-  instead of aborting the whole run. The item keeps its state, so a later run
-  retries it. Returns true when the item fetched something. }
+  no-longer-owned item, a bad file) into a logged skip instead of aborting the
+  whole run. The item keeps its state, so a later run retries it. }
 function TrySyncItem(backend: TMagicBackend; const ctx: TMagicContext;
   const backendName: string; const item: TCollectionItem;
-  withCovers: boolean; var failed: LongInt): boolean;
+  withCovers: boolean): TSyncOutcome;
 begin
-  Result := false;
   try
-    Result := SyncItem(backend, ctx, backendName, item, withCovers);
+    if SyncItem(backend, ctx, backendName, item, withCovers) then
+      TrySyncItem := soFetched
+    else
+      TrySyncItem := soSkipped;
   except
     on E: EMagicError do begin
       gLog.Warn(Format('skip "%s": %s', [ItemDisplayName(item), E.Message]));
-      Inc(failed);
+      TrySyncItem := soFailed;
     end;
     on E: Exception do begin
       gLog.Warn(Format('skip "%s": %s (%s)',
         [ItemDisplayName(item), E.Message, E.ClassName]));
-      Inc(failed);
+      TrySyncItem := soFailed;
     end;
   end;
 end;
@@ -1223,17 +1232,36 @@ var
   only: TStringArray;
   detail: TItemDetail;
   item: TCollectionItem;
-  i, fetched, failed: LongInt;
-  withCovers: boolean;
+  i, fetched, failed, consec, maxFailures: LongInt;
+  withCovers, stoppedEarly: boolean;
   backendName, scope: string;
+
+  {** Shows progress and syncs one item, tallying the outcome and tracking a run
+    of consecutive failures. Returns False when that run reaches maxFailures, so
+    the caller stops: a store that keeps refusing (an expired key, a missing web
+    session, abuse protection) should not be hammered through the whole list. A
+    success or a clean skip resets the run. }
+  function SyncOne(idx, total: LongInt; const it: TCollectionItem): boolean;
+  begin
+    SyncProgress(idx, total, it);
+    case TrySyncItem(backend, ctx, backendName, it, withCovers) of
+      soFetched: begin Inc(fetched); consec := 0; end;
+      soSkipped: consec := 0;
+      soFailed:  begin Inc(failed); Inc(consec); end;
+    end;
+    Result := (maxFailures <= 0) or (consec < maxFailures);
+  end;
+
 begin
   backendClass := RequireBackend(backendName);
   withCovers := HasFlag('--covers');
+  { Stop after this many consecutive failures (default 3); 0 disables the guard. }
+  maxFailures := StrToIntDef(ArgValue('--max-failures', ''), 3);
   { Optional positional item ids restrict the sync to just those items. }
   only := Positionals(['--backend', '--db', '--out', '--format', '--user',
     '--app-key', '--app-key-file', '--cookies', '--interval-ms', '--retries',
     '--timeout-ms', '--status', '--limit', '--bundle', '--creator',
-    '--user-agent']);
+    '--max-failures', '--user-agent']);
   s := OpenSession;
   try
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
@@ -1250,6 +1278,7 @@ begin
 
       fetched := 0;
       failed := 0;
+      consec := 0;
       if Length(only) > 0 then begin
         { Targeted sync: resolve the named items from the index, no full listing. }
         gLog.Info(Format('Syncing %d item(s) from the index...', [Length(only)]));
@@ -1265,9 +1294,7 @@ begin
           item.artist := detail.creator;
           item.itemType := detail.kind;
           item.pageUrl := detail.pageUrl;
-          SyncProgress(i, Length(only), item);
-          if TrySyncItem(backend, ctx, backendName, item, withCovers, failed) then
-            Inc(fetched);
+          if not SyncOne(i, Length(only), item) then break;
         end;
       end
       else if scope <> '' then begin
@@ -1275,11 +1302,8 @@ begin
           without sweeping, and download those items. }
         IndexScope(backend, s.index, backendName, scope, items);
         gLog.Info(Format('%d item(s) in %s.', [Length(items), SubsetLabel(scope)]));
-        for i := 0 to High(items) do begin
-          SyncProgress(i, Length(items), items[i]);
-          if TrySyncItem(backend, ctx, backendName, items[i], withCovers, failed) then
-            Inc(fetched);
-        end;
+        for i := 0 to High(items) do
+          if not SyncOne(i, Length(items), items[i]) then break;
       end
       else if HasFlag('--from-index') then begin
         { Download everything already indexed, without re-listing from the API.
@@ -1296,23 +1320,25 @@ begin
           item.artist := filtered[i].creator;
           item.itemType := filtered[i].kind;
           item.pageUrl := filtered[i].pageUrl;
-          SyncProgress(i, Length(filtered), item);
-          if TrySyncItem(backend, ctx, backendName, item, withCovers, failed) then
-            Inc(fetched);
+          if not SyncOne(i, Length(filtered), item) then break;
         end;
       end
       else begin
         { Full sync: list the whole collection to catch new and changed items. }
         IndexCollection(backend, s.index, backendName, items);
         gLog.Info(Format('%d items in collection.', [Length(items)]));
-        for i := 0 to High(items) do begin
-          SyncProgress(i, Length(items), items[i]);
-          if TrySyncItem(backend, ctx, backendName, items[i], withCovers, failed) then
-            Inc(fetched);
-        end;
+        for i := 0 to High(items) do
+          if not SyncOne(i, Length(items), items[i]) then break;
       end;
       gLog.EndProgress;
-      if failed > 0 then
+      stoppedEarly := (maxFailures > 0) and (consec >= maxFailures);
+      if stoppedEarly then
+        gLog.Info(Format('Sync stopped after %d consecutive failure(s): the '
+          + 'account or session may be blocked, or the credentials may not cover '
+          + 'these items. Fix them (e.g. load the web session with --firefox) '
+          + 'and re-run. %d fetched, %d failed so far. '
+          + '--max-failures 0 disables this.', [consec, fetched, failed]))
+      else if failed > 0 then
         gLog.Info(Format('Sync done: %d fetched, %d skipped after errors '
           + '(see warnings above; re-run to retry them).', [fetched, failed]))
       else

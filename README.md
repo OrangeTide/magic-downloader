@@ -256,6 +256,15 @@ item is still resolved and completed. Pass `--refresh` to re-resolve held items
 and pick up a store-side re-upload; `check` reports such updates without
 downloading.
 
+A download error on one item (an HTTP 403 on a session-gated or no-longer-owned
+item, a bad file) does not abort the run: it is logged, the item is left for a
+later retry, and the sync moves on. But a store that keeps refusing should not be
+hammered through the whole list, so `sync` stops after **3 consecutive failures**
+by default. A success or a clean skip resets the run, so scattered unavailable
+items do not trip it, only a sustained wall of failures (an expired key, a
+missing web session, abuse protection) does. Change the threshold with
+`--max-failures <n>`, or set `--max-failures 0` to never stop.
+
 `--bundle` and `--creator` narrow either `index` or `sync` to part of the
 collection, instead of the whole thing. They cannot be combined.
 

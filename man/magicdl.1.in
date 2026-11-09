@@ -313,6 +313,17 @@ For
 .BR sync :
 download from the stored index without listing from the store.
 .TP
+.BI "\-\-max\-failures " n
+For
+.BR sync :
+stop after
+.I n
+consecutive download failures. A store that keeps refusing (an expired key, a
+missing web session, abuse protection) should not be hammered through the whole
+list, so one success or clean skip resets the run. Default 3; 0 disables the
+guard. A download error is also skipped individually and the item is retried on a
+later run.
+.TP
 .B \-\-skip\-hidden
 Skip hidden collection items when indexing.
 .SS verify
