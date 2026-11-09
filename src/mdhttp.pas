@@ -325,14 +325,22 @@ begin
   end;
 end;
 
+const
+  {** A 403 taken as a throttle signal is retried through the rate-limit
+    backoff, but only a few times: a 403 that outlasts the pauses is a real
+    denial, not load, so an unowned item still fails reasonably fast. }
+  SOFT_403_MAX_RETRIES = 2;
+
 procedure TMagicHttp.RunWithRetry(const method, url, requestBody, contentType: string;
   respStream: TStream; pacing: TPacing; sendAuth, xhr: boolean;
   out contentDisposition: string);
 var
-  attempt, attempts, statusCode: LongInt;
+  attempt, attempts, statusCode, soft403: LongInt;
   delay: Int64;
+  throttle403: boolean;
 begin
   contentDisposition := '';
+  soft403 := 0;
   attempts := fRetries + 1;
   for attempt := 1 to attempts do begin
     fPacer.AwaitRateLimit;
@@ -351,12 +359,24 @@ begin
     except
       on e: EMagicHttpError do begin
         fLog.Debug(Format('Request failed: %s', [e.Message]));
-        if IsTerminalStatus(e.StatusCode) then
+        { A 403 is normally terminal, but a store that has already slowed us
+          with 429s may answer a continued burst with 403 instead. In that
+          state treat it as a throttle signal: back off and retry a few times. }
+        throttle403 := (e.StatusCode = HTTP_FORBIDDEN) and fPacer.IsThrottled;
+        if throttle403 then begin
+          Inc(soft403);
+          if soft403 > SOFT_403_MAX_RETRIES then
+            raise EMagicError.CreateFmt('Request refused with HTTP %d. %s',
+              [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]);
+          fLog.Info('Access denied while throttled; treating HTTP 403 as a '
+            + 'rate-limit signal and backing off.');
+        end
+        else if IsTerminalStatus(e.StatusCode) then
           raise EMagicError.CreateFmt('Request refused with HTTP %d. %s',
             [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]);
         if attempt = attempts then
           break;
-        if e.StatusCode = HTTP_TOO_MANY_REQUESTS then
+        if (e.StatusCode = HTTP_TOO_MANY_REQUESTS) or throttle403 then
           delay := fPacer.NoteRateLimited(attempt)
         else
           delay := fPacer.OrdinaryRetryDelay(attempt);

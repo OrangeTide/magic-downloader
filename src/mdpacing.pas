@@ -81,6 +81,7 @@ const
 
   HTTP_TOO_MANY_REQUESTS: LongInt = 429;
   HTTP_REQUEST_TIMEOUT: LongInt = 408;
+  HTTP_FORBIDDEN: LongInt = 403;
 
 type
   {** How much a request must be spaced out from the previous one. pcLight is for
@@ -121,6 +122,12 @@ type
 
     {** Exponential backoff with jitter for an ordinary (non-429) retry. }
     function OrdinaryRetryDelay(attempt: LongInt): Int64;
+
+    {** True once the pace has been slowed below the baseline by one or more
+      429s. Some stores escalate a sustained burst from 429 to 403 instead of
+      answering 429 again; a 403 seen in this state is a throttle signal, not a
+      permanent denial. }
+    function IsThrottled: boolean;
   end;
 
 {** True when repeating a request that failed with this status can only fail the
@@ -260,6 +267,11 @@ end;
 function TPacer.OrdinaryRetryDelay(attempt: LongInt): Int64;
 begin
   OrdinaryRetryDelay := ComputeDelay(RETRY_BASE_DELAY_MS, attempt);
+end;
+
+function TPacer.IsThrottled: boolean;
+begin
+  IsThrottled := fCurrentIntervalMs > fBaseIntervalMs;
 end;
 
 end.
