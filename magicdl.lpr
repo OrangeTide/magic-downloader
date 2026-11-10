@@ -15,7 +15,7 @@ uses
     single-byte transcode). termio: turn off echo while reading a key. }
   Classes, SysUtils, contnrs, fpjson, DateUtils, zipper,
   mdtypes, mdlog, mdpacing, mdhttp, mdindex, mdhash, mdbackend, mdcookies,
-  mdconfig, mdkeyring,
+  mdconfig, mdkeyring, mdlock,
   mdbackend_bandcamp,      { registers the bandcamp backend }
   mdbackend_drivethrurpg,  { registers the drivethrurpg backend }
   mdbackend_itchio;        { registers the itchio backend }
@@ -306,6 +306,14 @@ begin
     Result := IncludeTrailingPathDelimiter(gConfig.DataDir) + 'magicdl.sqlite';
   Result := ExpandPathVars(Result);
   ForceDirectories(ExtractFilePath(Result));
+end;
+
+{** The scope lock file for a backend's index: the database path with the
+  backend name and a .lock suffix, so each (database, backend) pair locks on its
+  own file and unrelated scopes never block each other. }
+function ScopeLockPath(const backend: string): string;
+begin
+  ScopeLockPath := ResolveDbPath + '.' + backend + '.lock';
 end;
 
 {** The output directory, or '' when none is configured. Precedence: --out,
@@ -925,11 +933,17 @@ var
   s: TSession;
   ctx: TMagicContext;
   items: TCollectionItemArray;
+  lock: TScopeLock;
   backendName, scope: string;
 begin
   backendClass := RequireBackend(backendName);
   s := OpenSession;
+  lock := nil;
   try
+    { Index lists and sweeps the backend's whole scope, so hold the scope lock
+      against a concurrent index or sync of the same backend on this database. }
+    lock := TScopeLock.Create(ScopeLockPath(backendName),
+      Format('%s on this index', [backendName]));
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     backend := backendClass.Create(ctx);
     try
@@ -960,6 +974,7 @@ begin
       backend.Free;
     end;
   finally
+    lock.Free;
     CloseSession(s);
   end;
 end;
@@ -1395,6 +1410,7 @@ var
   item: TCollectionItem;
   i, fetched, failed, consec, maxFailures: LongInt;
   withCovers, stoppedEarly, offlinePreview: boolean;
+  lock: TScopeLock;
   backendName, scope: string;
 
   {** Shows progress and syncs one item, tallying the outcome and tracking a run
@@ -1424,7 +1440,14 @@ begin
     '--timeout-ms', '--status', '--limit', '--bundle', '--creator',
     '--max-failures', '--user-agent']);
   s := OpenSession;
+  lock := nil;
   try
+    { A full sync lists and sweeps the backend's scope and writes items, so hold
+      the scope lock against a concurrent sync or index of the same backend on
+      this database. A dry run writes nothing, so it needs no lock. }
+    if not HasFlag('--dry-run') then
+      lock := TScopeLock.Create(ScopeLockPath(backendName),
+        Format('%s on this index', [backendName]));
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     { sync writes files, so an output directory is required. }
     if ctx.outputDir = '' then
@@ -1526,6 +1549,7 @@ begin
       backend.Free;
     end;
   finally
+    lock.Free;
     CloseSession(s);
   end;
 end;

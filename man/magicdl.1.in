@@ -528,6 +528,11 @@ and
 resolutions, reused for a day. Safe to delete;
 .B \-\-refresh
 also rewrites them.
+.TP
+.IB <database> . <backend> .lock
+Scope lock file next to the index, one per backend (see
+.BR CONCURRENCY ).
+Empty and advisory; safe to delete when no run is active.
 .SH EXAMPLES
 .PP
 Index a DriveThruRPG library:
@@ -579,6 +584,32 @@ A short\-lived download link that expires before it is fetched (seen as a 403 or
 410 on an owned item) is re\-minted and retried. The defaults are conservative;
 .B \-\-interval\-ms
 sets a faster base pace when an account tolerates it.
+.SH CONCURRENCY
+Runs for different backends, or for the same backend on separate index files,
+are independent and may run at once: the index is keyed by backend, so they
+touch disjoint rows, and each run paces and backs off on its own. A download
+never holds the index write lock, so a second run is not blocked while the first
+fetches a large file.
+.PP
+Two scope\-wide runs of the
+.B same
+backend on the
+.B same
+index are not safe to overlap, because each lists the collection and sweeps
+items it did not see to
+.IR removed ,
+so one would undo the other. An
+.B index
+or full
+.B sync
+takes an advisory lock for its backend and index (a
+.IB <database> . <backend> .lock
+file) and a second such run fails at once with a clear message rather than
+corrupting the view. Point one run at a separate
+.B \-\-db
+to run them in parallel. A
+.B \-\-dry\-run
+takes no lock, since it writes nothing.
 .SH EXIT STATUS
 .B magicdl
 exits 0 on success, 1 on an error, and 2 on an unknown command.
