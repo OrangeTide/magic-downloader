@@ -60,6 +60,12 @@ type
       browser cookies. }
     class function CookieHost: string; virtual;
 
+    {** A backend-specific default User-Agent, used when the run sets none of its
+      own (no --user-agent and no config user-agent). Empty means use the
+      program's own default. A store that serves a different response to a
+      non-browser client overrides this. }
+    class function DefaultUserAgent: string; virtual;
+
     {** Confirms the supplied credentials work and any one-time setup is done.
       Raises EMagicError on failure. }
     procedure Authenticate; virtual; abstract;
@@ -167,6 +173,11 @@ end;
 class function TMagicBackend.CookieHost: string;
 begin
   CookieHost := '';
+end;
+
+class function TMagicBackend.DefaultUserAgent: string;
+begin
+  DefaultUserAgent := '';
 end;
 
 function TMagicBackend.AccountLabel: string;

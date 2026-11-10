@@ -453,6 +453,26 @@ begin
       [backendName]);
 end;
 
+{** The User-Agent for this run. Precedence: --user-agent, then the config
+  user-agent (the backend's [backend.<name>] section before [general]), then the
+  backend's own default (a browser string where the store serves a non-browser
+  client the wrong thing), then the program default. }
+function ResolveUserAgent: string;
+var
+  bc: TMagicBackendClass;
+begin
+  Result := ArgValue('--user-agent', '');
+  if Result = '' then
+    Result := gConfig.Get(ArgValue('--backend', ''), 'user-agent', '');
+  if Result = '' then begin
+    bc := FindBackend(ArgValue('--backend', ''));
+    if bc <> nil then
+      Result := bc.DefaultUserAgent;
+  end;
+  if Result = '' then
+    Result := 'magicdl/' + APP_VERSION;
+end;
+
 {** Builds the shared services from the command-line options. }
 function OpenSession: TSession;
 begin
@@ -467,9 +487,7 @@ begin
       StrToIntDef(gConfig.Get('', 'retries', ''), 5)),
     StrToIntDef(ArgValue('--timeout-ms', ''),
       StrToIntDef(gConfig.Get('', 'timeout-ms', ''), 30000)),
-    { CLI wins, then the config user-agent, then an honest default. }
-    ArgValue('--user-agent',
-      gConfig.Get('', 'user-agent', 'magicdl/' + APP_VERSION)));
+    ResolveUserAgent);
   Result.index := TMagicIndex.Create(ResolveDbPath);
 end;
 

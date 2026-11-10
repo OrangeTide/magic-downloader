@@ -54,6 +54,7 @@ type
     constructor Create(const aCtx: TMagicContext); override;
     destructor Destroy; override;
     class function BackendName: string; override;
+    class function DefaultUserAgent: string; override;
     procedure Authenticate; override;
     function ListCollection: TCollectionItemArray; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
@@ -148,6 +149,16 @@ end;
 class function TDriveThruRpgBackend.BackendName: string;
 begin
   BackendName := 'drivethrurpg';
+end;
+
+{** The file download goes through watermark.drivethrurpg.com's download portal,
+  which serves the site's HTML to a non-browser client instead of the file, so
+  the download saves a web page rather than the PDF. A browser User-Agent gets
+  the file. The reference drpg tool downloads with the same string. An explicit
+  --user-agent or a config user-agent still overrides this. }
+class function TDriveThruRpgBackend.DefaultUserAgent: string;
+begin
+  DefaultUserAgent := 'Mozilla/5.0';
 end;
 
 procedure TDriveThruRpgBackend.Authenticate;
