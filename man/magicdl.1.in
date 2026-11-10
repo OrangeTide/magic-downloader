@@ -434,6 +434,11 @@ Resolve and report without writing files.
 .TP
 .B \-\-verbose
 Debug logging.
+.TP
+.BR \-\-help ", " \-h
+Print this usage and exit. Recognized anywhere on the command line, so it works
+after a command and its options. An unrecognized option is reported as an error
+rather than ignored.
 .SH BACKENDS
 .TP
 .B bandcamp
@@ -566,7 +571,12 @@ magicdl sync \-\-backend itchio \-\-creator willibab \-\-out ~/itch
 .RE
 .SH RATE LIMITING
 Some stores are quick to rate limit and slow to forgive. Requests are spaced out
-and backed off after an HTTP 429. The defaults are conservative;
+and backed off after an HTTP 429, honoring the server's
+.B Retry\-After
+when it sends one. Only a 429 slows the shared pace; an HTTP 403 is treated as a
+per\-request denial, so a run of expected 403s does not drag the whole run down.
+A short\-lived download link that expires before it is fetched (seen as a 403 or
+410 on an owned item) is re\-minted and retried. The defaults are conservative;
 .B \-\-interval\-ms
 sets a faster base pace when an account tolerates it.
 .SH EXIT STATUS

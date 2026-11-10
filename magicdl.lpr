@@ -101,6 +101,67 @@ begin
   end;
 end;
 
+const
+  {** Every option the program understands, as the union across all commands.
+    Split by whether the option takes a following value, so a value is not
+    mistaken for a flag. ValidateFlags rejects anything outside these sets, which
+    turns a typo or a flag meant for another command into a clear error instead
+    of a silent no-op. A flag valid for any command is accepted for all of them;
+    each command still reads only the flags it acts on. }
+  KNOWN_VALUE_OPTS: array[0..19] of string = (
+    '--app-key', '--app-key-file', '--backend', '--bundle', '--cookies',
+    '--creator', '--db', '--format', '--interval-ms', '--limit',
+    '--max-failures', '--max-owned', '--out', '--out-file', '--reason',
+    '--retries', '--status', '--timeout-ms', '--user', '--user-agent');
+  KNOWN_BOOL_FLAGS: array[0..20] of string = (
+    '--blacklisted', '--covers', '--downloaded', '--dry-run', '--firefox',
+    '--from-index', '--hash', '--hash-cross-host', '--hashes', '--help',
+    '--hidden', '--html', '--json', '--no-check', '--not-downloaded',
+    '--refresh', '--rehash', '--rescan', '--skip-hidden', '--superseded',
+    '--verbose');
+
+{** Raises EMagicError on the first option after the command that the program
+  does not understand, so bad input fails loudly before any work begins. The
+  value of a value-taking option is skipped, so a value that happens to start
+  with "--" is not treated as a flag. Only "-h" is accepted as a short option;
+  "--help"/"-h" are handled before this runs. }
+procedure ValidateFlags;
+var
+  i, j: LongInt;
+  arg: string;
+  known, isValue: boolean;
+begin
+  i := 2;  { skip program name (0) and command (1) }
+  while i <= ParamCount do begin
+    arg := ParamStr(i);
+    if Copy(arg, 1, 2) = '--' then begin
+      known := false;
+      isValue := false;
+      for j := 0 to High(KNOWN_VALUE_OPTS) do
+        if arg = KNOWN_VALUE_OPTS[j] then begin
+          known := true;
+          isValue := true;
+          break;
+        end;
+      if not known then
+        for j := 0 to High(KNOWN_BOOL_FLAGS) do
+          if arg = KNOWN_BOOL_FLAGS[j] then begin
+            known := true;
+            break;
+          end;
+      if not known then
+        raise EMagicError.CreateFmt(
+          'Unknown option "%s". Run "magicdl --help" for usage.', [arg]);
+      if isValue then
+        Inc(i);  { skip the option's value so it is not scanned as a flag }
+    end
+    else if (Length(arg) > 1) and (arg[1] = '-') and (arg <> '-h') then
+      raise EMagicError.CreateFmt(
+        'Unknown option "%s". Run "magicdl --help" for usage.', [arg]);
+    Inc(i);
+  end;
+end;
+
 procedure PrintUsage;
 var
   names: TStringArray;
@@ -193,6 +254,7 @@ begin
   Writeln('  --skip-hidden              Skip hidden collection items');
   Writeln('  --dry-run                  Preview only: no files or index writes');
   Writeln('  --verbose                  Debug logging');
+  Writeln('  --help, -h                 Show this usage and exit');
   Writeln;
   Writeln('Config file (optional): ',
     IncludeTrailingPathDelimiter(gConfig.ConfigDir), 'config.ini');
@@ -3354,31 +3416,40 @@ begin
       command := ParamStr(1);
 
     try
-      case command of
-        'list-backends': CmdListBackends;
-        'bundles': CmdBundles;
-        'creators': CmdCreators;
-        'index': CmdIndex;
-        'sync': CmdSync;
-        'check': CmdCheck;
-        'verify': CmdVerify;
-        'status': CmdStatus;
-        'list': CmdList;
-        'details': CmdDetails;
-        'relocate': CmdRelocate;
-        'forget': CmdForget;
-        'reorganize': CmdReorganize;
-        'import': CmdImport;
-        'manifest': CmdManifest;
-        'blacklist': CmdBlacklist;
-        'allow': CmdAllow;
-        'key': CmdKey;
-        '', '-h', '--help', 'help':
-          PrintUsage;
-        else begin
-          gLog.Error(Format('Unknown command: "%s"', [command]));
-          PrintUsage;
-          ExitCode := 2;
+      { --help/-h anywhere on the line prints usage and runs nothing, even after
+        a command and its arguments. Otherwise every option is validated before
+        the command runs, so a typo or an unknown flag fails instead of being
+        silently ignored. }
+      if HasFlag('--help') or HasFlag('-h') then
+        PrintUsage
+      else begin
+        ValidateFlags;
+        case command of
+          'list-backends': CmdListBackends;
+          'bundles': CmdBundles;
+          'creators': CmdCreators;
+          'index': CmdIndex;
+          'sync': CmdSync;
+          'check': CmdCheck;
+          'verify': CmdVerify;
+          'status': CmdStatus;
+          'list': CmdList;
+          'details': CmdDetails;
+          'relocate': CmdRelocate;
+          'forget': CmdForget;
+          'reorganize': CmdReorganize;
+          'import': CmdImport;
+          'manifest': CmdManifest;
+          'blacklist': CmdBlacklist;
+          'allow': CmdAllow;
+          'key': CmdKey;
+          '', 'help':
+            PrintUsage;
+          else begin
+            gLog.Error(Format('Unknown command: "%s"', [command]));
+            PrintUsage;
+            ExitCode := 2;
+          end;
         end;
       end;
     except
