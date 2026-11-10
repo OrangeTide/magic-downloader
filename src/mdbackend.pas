@@ -89,6 +89,15 @@ type
       "<user>.itch.io/<slug>" folders map one to one onto items. }
     function ImportsByPath: boolean; virtual;
 
+    {** True when `import` (under ImportsByPath) may fall back to matching an item
+      by the leaf (last) folder name of its ItemSubdir anywhere in the library,
+      when the full path does not exist. DriveThruRPG sets this: the store
+      re-attributes a product to a different publisher than the library filed it
+      under, so the <publisher>/<product> path misses even though the <product>
+      folder is present under another publisher. The leaf name is the stable
+      key. Default: false. }
+    function AdoptsByLeafName: boolean; virtual;
+
     {** True when this backend lays items out as nested "<host>/<item>" folders,
       so `reorganize` can group a shared archive by host and adopt loose files
       into the owning item's folder. itch.io ("<user>.itch.io/<slug>") and
@@ -193,6 +202,11 @@ end;
 function TMagicBackend.ImportsByPath: boolean;
 begin
   ImportsByPath := false;
+end;
+
+function TMagicBackend.AdoptsByLeafName: boolean;
+begin
+  AdoptsByLeafName := false;
 end;
 
 function TMagicBackend.ReorganizesByFolder: boolean;

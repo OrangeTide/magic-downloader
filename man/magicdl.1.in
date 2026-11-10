@@ -123,9 +123,12 @@ and Bandcamp
 .RI ( <artist> / <album> ).
 For each host that owns exactly one indexed item, the files sitting directly
 under the host are moved into that item's folder. This pass is offline.
-DriveThruRPG uses a single flat folder per item, with no shared host folder, so
+DriveThruRPG lays each product out as
+.IR <publisher> / <product> ,
+the same as its own app, but
 .B reorganize
-does not apply to it; use
+does not apply to it (its folders are not grouped under a shared host the way a
+loose\-file sweep needs); use
 .B import
 instead.
 .IP
@@ -460,7 +463,16 @@ An album arrives as a zip, which is unpacked in place into
 .TP
 .B drivethrurpg
 RPG PDFs and files. Authenticates with an application key from the account's
-"Library App Keys" page.
+"Library App Keys" page. Downloads follow the store app's own
+.IR <publisher> / <product>
+layout, so
+.B import
+can adopt an existing library downloaded by the app or the drpg tool; when the
+store has re\-filed a product under a different publisher, import also matches it
+by the product folder name as long as that name is unique in the library.
+Needs a browser User\-Agent for the watermark download portal, which the backend
+sends by default (override with
+.BR \-\-user\-agent ).
 .TP
 .B itchio
 Games, tools, and assets. Authenticates with an API key from

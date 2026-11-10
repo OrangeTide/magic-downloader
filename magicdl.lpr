@@ -3037,6 +3037,46 @@ end;
   SanitizeName(title)); a path backend such as itch.io matches its own download
   layout, "<user>.itch.io/<slug>", as a direct folder lookup. --dry-run reports
   without marking. The collection must be indexed first. }
+{** Records every directory under base that directly holds a file, keyed by its
+  canonical (case- and punctuation-folded) leaf name, into map as name=path. For
+  the AdoptsByLeafName import fallback: when a store re-files a product under a
+  different top folder than the library used, the product folder is still found
+  by its own name. The first path wins for a repeated name; any copy that holds
+  the files is enough to mark the item already downloaded. }
+procedure CollectLeafDirs(const base: string; map: TStringList);
+var
+  sr: TSearchRec;
+  key: string;
+  hasFile: boolean;
+begin
+  hasFile := false;
+  if FindFirst(IncludeTrailingPathDelimiter(base) + '*', faAnyFile, sr) = 0 then
+  try
+    repeat
+      if (sr.Name = '.') or (sr.Name = '..') then
+        continue;
+      if (sr.Attr and faDirectory) <> 0 then
+        CollectLeafDirs(IncludeTrailingPathDelimiter(base) + sr.Name, map)
+      else
+        hasFile := true;
+    until FindNext(sr) <> 0;
+  finally
+    FindClose(sr);
+  end;
+  if hasFile then begin
+    key := CanonName(ExtractFileName(ExcludeTrailingPathDelimiter(base)));
+    if key <> '' then begin
+      if map.IndexOfName(key) < 0 then
+        map.Values[key] := base
+      else
+        { Seen under two folders: the name is ambiguous, so it is not a safe
+          key to adopt by. Mark it (#1) so the fallback skips it rather than
+          guessing and wrongly skipping that item's download. }
+        map.Values[key] := #1;
+    end;
+  end;
+end;
+
 procedure CmdImport;
 var
   backendClass: TMagicBackendClass;
@@ -3046,7 +3086,7 @@ var
   args: TStringArray;
   index: TMagicIndex;
   items: TIndexedItemArray;
-  keys, ckeys: TStringList;
+  keys, ckeys, leaves: TStringList;
   f: TItemFilter;
   citem: TCollectionItem;
   artistRec, albumRec: TSearchRec;
@@ -3081,7 +3121,12 @@ begin
     unmatched := 0;
 
     if backend.ImportsByPath then begin
-      { Direct lookup: each item's own download path under the library. }
+      { Direct lookup: each item's own download path under the library. A backend
+        that AdoptsByLeafName also tries the item's leaf (product) folder name
+        anywhere in the tree when the full path misses, catching items the store
+        re-filed under a different top folder. The leaf map is built once, on the
+        first miss. }
+      leaves := nil;
       for i := 0 to High(items) do begin
         citem := Default(TCollectionItem);
         citem.id := items[i].backendId;
@@ -3094,7 +3139,21 @@ begin
           continue;
         end;
         full := IncludeTrailingPathDelimiter(dir) + rel;
-        if DirectoryExists(full) then begin
+        if not DirectoryExists(full) then begin
+          full := '';
+          if backend.AdoptsByLeafName then begin
+            if leaves = nil then begin
+              leaves := TStringList.Create;
+              gLog.Info('Scanning the library for product folders...');
+              CollectLeafDirs(dir, leaves);
+            end;
+            key := CanonName(citem.title);
+            idx := leaves.IndexOfName(key);
+            if (key <> '') and (idx >= 0) and (leaves.ValueFromIndex[idx] <> #1) then
+              full := leaves.ValueFromIndex[idx];
+          end;
+        end;
+        if full <> '' then begin
           Inc(matched);
           if dryRun then
             gLog.Info(Format('  match: %s  [%s] -> %s',
@@ -3107,6 +3166,7 @@ begin
           gLog.Debug(Format('  no local folder: %s', [rel]));
         end;
       end;
+      leaves.Free;
     end
     else begin
       { Name walk: Artist folders, then album folders, keyed by creator/title. }

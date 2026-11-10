@@ -55,6 +55,9 @@ type
     destructor Destroy; override;
     class function BackendName: string; override;
     class function DefaultUserAgent: string; override;
+    function ItemSubdir(const item: TCollectionItem): string; override;
+    function ImportsByPath: boolean; override;
+    function AdoptsByLeafName: boolean; override;
     procedure Authenticate; override;
     function ListCollection: TCollectionItemArray; override;
     function ResolveCoverUrl(const item: TCollectionItem): string; override;
@@ -159,6 +162,34 @@ end;
 class function TDriveThruRpgBackend.DefaultUserAgent: string;
 begin
   DefaultUserAgent := 'Mozilla/5.0';
+end;
+
+{** DriveThruRPG's own app lays a product out as <publisher>/<product>. Follow
+  that so magicdl downloads land beside an existing library and `import` can
+  adopt it by path. The caller sanitizes each level. A product with no publisher
+  falls back to a single <product> folder. (A per-backend configurable layout is
+  a planned follow-up; this is the default.) }
+function TDriveThruRpgBackend.ItemSubdir(const item: TCollectionItem): string;
+begin
+  if (item.artist <> '') and (item.title <> '') then
+    Result := item.artist + '/' + item.title
+  else if item.title <> '' then
+    Result := item.title
+  else
+    Result := '';
+end;
+
+function TDriveThruRpgBackend.ImportsByPath: boolean;
+begin
+  ImportsByPath := true;  { adopt an existing <publisher>/<product> library }
+end;
+
+function TDriveThruRpgBackend.AdoptsByLeafName: boolean;
+begin
+  { The store moves a product between publishers over time, so the
+    <publisher>/<product> path can miss while the <product> folder still exists
+    under a different publisher. Fall back to the product folder name. }
+  AdoptsByLeafName := true;
 end;
 
 procedure TDriveThruRpgBackend.Authenticate;
