@@ -1232,6 +1232,49 @@ begin
   end;
 end;
 
+{** Offline preview of one indexed item for sync --from-index --dry-run. It
+  reports what the stored index already knows, without contacting the store, so
+  a dry run over the index needs no network and no authentication. It cannot see
+  the store's current version, so it reports from recorded state only: a skip
+  (blacklisted, superseded, imported, or fully present), the files the index has
+  not marked present, or the whole item when no file records exist yet. }
+procedure PreviewIndexedItem(index: TMagicIndex; const backendName: string;
+  const item: TCollectionItem);
+var
+  files: TFileInfoArray;
+  i, pending: LongInt;
+begin
+  if index.IsBlacklisted(backendName, item.id) then begin
+    gLog.Debug(Format('  skip blacklisted "%s"', [item.id]));
+    exit;
+  end;
+  if index.IsSuperseded(backendName, item.id) then begin
+    gLog.Debug(Format('  skip superseded "%s"', [item.id]));
+    exit;
+  end;
+  if index.IsImported(backendName, item.id) then begin
+    gLog.Debug(Format('  skip imported "%s" (already owned locally)', [item.id]));
+    exit;
+  end;
+  if index.ItemFullyPresent(backendName, item.id) then begin
+    gLog.Debug(Format('  skip present "%s" (fully downloaded)', [item.id]));
+    exit;
+  end;
+  files := index.ItemFiles(backendName, item.id);
+  pending := 0;
+  for i := 0 to High(files) do
+    if files[i].state <> 'present' then begin
+      gLog.Info(Format('  would download "%s" (%s)',
+        [files[i].name, files[i].versionKey]));
+      Inc(pending);
+    end;
+  { No per-file records yet: the item is indexed but was never resolved against
+    the store, so the index cannot name its files offline. }
+  if pending = 0 then
+    gLog.Info(Format('  would download "%s" (files not yet indexed)',
+      [ItemDisplayName(item)]));
+end;
+
 procedure CmdSync;
 var
   backendClass: TMagicBackendClass;
@@ -1245,7 +1288,7 @@ var
   detail: TItemDetail;
   item: TCollectionItem;
   i, fetched, failed, consec, maxFailures: LongInt;
-  withCovers, stoppedEarly: boolean;
+  withCovers, stoppedEarly, offlinePreview: boolean;
   backendName, scope: string;
 
   {** Shows progress and syncs one item, tallying the outcome and tracking a run
@@ -1289,8 +1332,13 @@ begin
       if (scope <> '') and HasFlag('--from-index') then
         raise EMagicError.Create(
           'Use either --from-index or --bundle/--creator, not both.');
+      { A dry-run over the stored index (--from-index, no positional ids) reads
+        only the index, so it skips authentication and never touches the store. }
+      offlinePreview := ctx.dryRun and HasFlag('--from-index')
+        and (Length(only) = 0);
       LoadCookies(backendClass, s.cookies);
-      backend.Authenticate;
+      if not offlinePreview then
+        backend.Authenticate;
       gLog.Info(Format('Syncing %s collection%s...',
         [backendName, ForAccount(backend)]));
 
@@ -1338,7 +1386,14 @@ begin
           item.artist := filtered[i].creator;
           item.itemType := filtered[i].kind;
           item.pageUrl := filtered[i].pageUrl;
-          if not SyncOne(i, Length(filtered), item) then break;
+          { Offline preview reads the index alone; a real run resolves and
+            downloads each item through the store. }
+          if offlinePreview then begin
+            SyncProgress(i, Length(filtered), item);
+            PreviewIndexedItem(s.index, backendName, item);
+          end
+          else if not SyncOne(i, Length(filtered), item) then
+            break;
         end;
       end
       else begin
