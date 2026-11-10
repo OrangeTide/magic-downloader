@@ -432,6 +432,15 @@ Note why an item is blacklisted.
 .B \-\-dry\-run
 Resolve and report without writing files.
 .TP
+.B \-\-wait
+For
+.B sync
+and
+.BR index :
+when another run holds the backend's index lock, wait for a turn instead of
+failing at once (see
+.BR CONCURRENCY ).
+.TP
 .B \-\-verbose
 Debug logging.
 .TP
@@ -610,6 +619,15 @@ corrupting the view. Point one run at a separate
 to run them in parallel. A
 .B \-\-dry\-run
 takes no lock, since it writes nothing.
+.PP
+Pass
+.B \-\-wait
+to queue behind a running one instead of failing. A
+.B sync
+hands the lock over between items, so a queued run is served roughly in arrival
+order and makes progress rather than waiting out the whole run. Each run keeps
+the lock across its own listing and sweep, so those stay exclusive. This is for
+politeness, not speed: queued runs take turns, they do not download in parallel.
 .SH EXIT STATUS
 .B magicdl
 exits 0 on success, 1 on an error, and 2 on an unknown command.

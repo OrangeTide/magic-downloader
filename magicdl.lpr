@@ -113,12 +113,12 @@ const
     '--creator', '--db', '--format', '--interval-ms', '--limit',
     '--max-failures', '--max-owned', '--out', '--out-file', '--reason',
     '--retries', '--status', '--timeout-ms', '--user', '--user-agent');
-  KNOWN_BOOL_FLAGS: array[0..20] of string = (
+  KNOWN_BOOL_FLAGS: array[0..21] of string = (
     '--blacklisted', '--covers', '--downloaded', '--dry-run', '--firefox',
     '--from-index', '--hash', '--hash-cross-host', '--hashes', '--help',
     '--hidden', '--html', '--json', '--no-check', '--not-downloaded',
     '--refresh', '--rehash', '--rescan', '--skip-hidden', '--superseded',
-    '--verbose');
+    '--verbose', '--wait');
 
 {** Raises EMagicError on the first option after the command that the program
   does not understand, so bad input fails loudly before any work begins. The
@@ -253,6 +253,7 @@ begin
   Writeln('  --user-agent <s>           HTTP User-Agent (default magicdl/<version>)');
   Writeln('  --skip-hidden              Skip hidden collection items');
   Writeln('  --dry-run                  Preview only: no files or index writes');
+  Writeln('  --wait                     Queue for a busy index instead of failing (sync, index)');
   Writeln('  --verbose                  Debug logging');
   Writeln('  --help, -h                 Show this usage and exit');
   Writeln;
@@ -941,9 +942,10 @@ begin
   lock := nil;
   try
     { Index lists and sweeps the backend's whole scope, so hold the scope lock
-      against a concurrent index or sync of the same backend on this database. }
-    lock := TScopeLock.Create(ScopeLockPath(backendName),
-      Format('%s on this index', [backendName]));
+      against a concurrent index or sync of the same backend on this database.
+      --wait queues behind a running one instead of failing. }
+    lock := TScopeLock.Create(ScopeLockPath(backendName), backendName,
+      HasFlag('--wait'), gLog);
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     backend := backendClass.Create(ctx);
     try
@@ -1426,6 +1428,9 @@ var
       soSkipped: consec := 0;
       soFailed:  begin Inc(failed); Inc(consec); end;
     end;
+    { Hand the scope lock to any queued run between items (no-op when alone). }
+    if lock <> nil then
+      lock.Yield;
     Result := (maxFailures <= 0) or (consec < maxFailures);
   end;
 
@@ -1444,10 +1449,12 @@ begin
   try
     { A full sync lists and sweeps the backend's scope and writes items, so hold
       the scope lock against a concurrent sync or index of the same backend on
-      this database. A dry run writes nothing, so it needs no lock. }
+      this database. --wait queues behind a running one instead of failing, and
+      SyncOne yields the lock between items so a queued run gets its turns. A dry
+      run writes nothing, so it needs no lock. }
     if not HasFlag('--dry-run') then
-      lock := TScopeLock.Create(ScopeLockPath(backendName),
-        Format('%s on this index', [backendName]));
+      lock := TScopeLock.Create(ScopeLockPath(backendName), backendName,
+        HasFlag('--wait'), gLog);
     ctx := BuildContext(s.index, s.cookies, s.http, backendName);
     { sync writes files, so an output directory is required. }
     if ctx.outputDir = '' then
