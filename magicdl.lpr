@@ -185,7 +185,7 @@ begin
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
   Writeln('  --user-agent <s>           HTTP User-Agent (default magicdl/<version>)');
   Writeln('  --skip-hidden              Skip hidden collection items');
-  Writeln('  --dry-run                  Do not write files');
+  Writeln('  --dry-run                  Preview only: no files or index writes');
   Writeln('  --verbose                  Debug logging');
   Writeln;
   Writeln('Config file (optional): ',
@@ -650,13 +650,17 @@ end;
   collection. It upserts only the scope's items and does NOT sweep, since it saw
   only part of the collection and must not mark the rest removed. }
 procedure IndexScope(backend: TMagicBackend; index: TMagicIndex;
-  const backendName, scopeRef: string; out items: TCollectionItemArray);
+  const backendName, scopeRef: string; out items: TCollectionItemArray;
+  dryRun: boolean = false);
 var
   seen: string;
   i: LongInt;
 begin
   seen := NowIsoUtc;
   items := ResolveScope(backend, backendName, scopeRef);
+  { Under --dry-run the subset is only previewed, so the index is left untouched. }
+  if dryRun then
+    exit;
   for i := 0 to High(items) do
     index.UpsertItem(backendName, items[i], seen);
   index.Commit;
@@ -1084,15 +1088,18 @@ begin
 
   if (availability <> avAvailable) or (Length(targets) = 0) then begin
     if availability = avPreorder then begin
-      ctx.index.SetItemStatus(backendName, item.id, ITEM_PREORDER);
+      if not ctx.dryRun then
+        ctx.index.SetItemStatus(backendName, item.id, ITEM_PREORDER);
       gLog.Info(Format('  preorder "%s": not released yet',
         [ItemDisplayName(item)]));
     end
     else begin
-      ctx.index.SetItemStatus(backendName, item.id, ITEM_UNAVAILABLE);
+      if not ctx.dryRun then
+        ctx.index.SetItemStatus(backendName, item.id, ITEM_UNAVAILABLE);
       gLog.Info(Format('  skip "%s": nothing downloadable', [item.id]));
     end;
-    ctx.index.Commit;
+    if not ctx.dryRun then
+      ctx.index.Commit;
     exit;
   end;
 
@@ -1110,9 +1117,12 @@ begin
   if targets[0].artist <> '' then named.artist := targets[0].artist;
   if targets[0].title <> '' then named.title := targets[0].title;
   if targets[0].releasedAt <> '' then named.releaseDate := targets[0].releasedAt;
-  ctx.index.UpsertItem(backendName, named, seen);
-  ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
-    targets[0].releasedAt, seen);
+  { Dry-run previews downloads without recording anything in the index. }
+  if not ctx.dryRun then begin
+    ctx.index.UpsertItem(backendName, named, seen);
+    ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
+      targets[0].releasedAt, seen);
+  end;
 
   itemDir := ItemOutputDir(backend, ctx, named);
 
@@ -1175,8 +1185,10 @@ begin
       ctx.http.Download(coverUrl, itemDir, 'cover.jpg', pcNormal);
   end;
 
-  ctx.index.SetItemStatus(backendName, item.id, ITEM_ACTIVE);
-  ctx.index.Commit;
+  if not ctx.dryRun then begin
+    ctx.index.SetItemStatus(backendName, item.id, ITEM_ACTIVE);
+    ctx.index.Commit;
+  end;
   SyncItem := fetchedAny;
 end;
 
@@ -1271,6 +1283,12 @@ begin
     backend := backendClass.Create(ctx);
     try
       scope := ScopeArg(backend, backendName);
+      { --from-index reads the stored index; --bundle/--creator list a subset
+        from the store. They choose different sources, so reject the pair rather
+        than silently letting the subset win. }
+      if (scope <> '') and HasFlag('--from-index') then
+        raise EMagicError.Create(
+          'Use either --from-index or --bundle/--creator, not both.');
       LoadCookies(backendClass, s.cookies);
       backend.Authenticate;
       gLog.Info(Format('Syncing %s collection%s...',
@@ -1300,7 +1318,7 @@ begin
       else if scope <> '' then begin
         { Subset sync: list only the subset (a bundle or creator), index it
           without sweeping, and download those items. }
-        IndexScope(backend, s.index, backendName, scope, items);
+        IndexScope(backend, s.index, backendName, scope, items, ctx.dryRun);
         gLog.Info(Format('%d item(s) in %s.', [Length(items), SubsetLabel(scope)]));
         for i := 0 to High(items) do
           if not SyncOne(i, Length(items), items[i]) then break;
