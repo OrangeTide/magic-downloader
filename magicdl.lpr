@@ -290,14 +290,18 @@ begin
   end;
 end;
 
-{** The index database path. Precedence: --db, then the config [general] db,
-  then the standard data location. The parent directory is created if needed so
-  a fresh install can open a new database. }
+{** The index database path. Precedence: --db, then the config db key (the
+  backend's own [backend.<name>] section before [general]), then the standard
+  data location. Reading the backend section lets each backend keep a separate
+  index, so concurrent runs of different backends never share a file. The
+  backend name comes from --backend; a command without one falls through to
+  [general]. The parent directory is created if needed so a fresh install can
+  open a new database. }
 function ResolveDbPath: string;
 begin
   Result := ArgValue('--db', '');
   if Result = '' then
-    Result := gConfig.Get('', 'db', '');
+    Result := gConfig.Get(ArgValue('--backend', ''), 'db', '');
   if Result = '' then
     Result := IncludeTrailingPathDelimiter(gConfig.DataDir) + 'magicdl.sqlite';
   Result := ExpandPathVars(Result);
@@ -1191,6 +1195,13 @@ begin
     ctx.index.UpsertItem(backendName, named, seen);
     ctx.index.UpsertVersion(backendName, item.id, targets[0].versionKey,
       targets[0].releasedAt, seen);
+    { Commit the metadata before downloading, and commit each file as it lands
+      (below), so the index write lock is never held across a download. Holding
+      it across a multi-minute fetch blocks any other writer past the busy
+      timeout, so a second magicdl on the same index aborts with "database is
+      locked". Each file is already durable on its own, which the resumable
+      design relies on, so per-file commits lose no needed atomicity. }
+    ctx.index.Commit;
   end;
 
   itemDir := ItemOutputDir(backend, ctx, named);
@@ -1269,6 +1280,8 @@ begin
       ctx.index.RecordFile(backendName, item.id, targets[i].versionKey,
         targets[i].name, targets[i].format, savedPath, fileSize, sha, seen);
     end;
+    { Commit this file at once so the next download runs with no lock held. }
+    ctx.index.Commit;
     fetchedAny := true;
   end;
 
