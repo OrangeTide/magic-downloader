@@ -31,7 +31,7 @@ type
       failures (no HTTP answer). }
     function DoOnceToStream(const method, url, requestBody, contentType: string;
       respStream: TStream; sendAuth, xhr: boolean;
-      out contentDisposition: string): LongInt;
+      out contentDisposition: string; out retryAfterMs: Int64): LongInt;
     {** The shared pacing and retry loop. Writes the successful response body to
       respStream, which is reset before each attempt. }
     procedure RunWithRetry(const method, url, requestBody, contentType: string;
@@ -281,13 +281,34 @@ begin
   end;
 end;
 
+{** Parses a Retry-After header value into milliseconds, or 0 when it is absent
+  or not understood. The delta-seconds form (a bare integer) is what itch.io and
+  the other JSON APIs send and is honoured here. The HTTP-date form is valid per
+  RFC 7231 but not emitted by these stores, so it falls through to 0 and the
+  caller's computed backoff takes over. }
+function ParseRetryAfter(const value: string): Int64;
+var
+  s: string;
+  seconds: Int64;
+begin
+  ParseRetryAfter := 0;
+  s := Trim(value);
+  if s = '' then
+    exit;
+  seconds := StrToInt64Def(s, -1);
+  if seconds >= 0 then
+    ParseRetryAfter := seconds * 1000;
+end;
+
 function TMagicHttp.DoOnceToStream(const method, url, requestBody, contentType: string;
-  respStream: TStream; sendAuth, xhr: boolean; out contentDisposition: string): LongInt;
+  respStream: TStream; sendAuth, xhr: boolean; out contentDisposition: string;
+  out retryAfterMs: Int64): LongInt;
 var
   client: TFPHTTPClient;
   reqStream: TStringStream;
 begin
   contentDisposition := '';
+  retryAfterMs := 0;
   client := TFPHTTPClient.Create(nil);
   reqStream := nil;
   try
@@ -318,6 +339,7 @@ begin
     { Empty allowed-codes set: do not raise on 4xx/5xx, inspect the code below. }
     client.HTTPMethod(method, url, respStream, []);
     contentDisposition := client.ResponseHeaders.Values['Content-Disposition'];
+    retryAfterMs := ParseRetryAfter(client.ResponseHeaders.Values['Retry-After']);
     DoOnceToStream := client.ResponseStatusCode;
   finally
     reqStream.Free;
@@ -336,10 +358,11 @@ procedure TMagicHttp.RunWithRetry(const method, url, requestBody, contentType: s
   out contentDisposition: string);
 var
   attempt, attempts, statusCode, soft403: LongInt;
-  delay: Int64;
+  delay, retryAfterMs: Int64;
   throttle403: boolean;
 begin
   contentDisposition := '';
+  retryAfterMs := 0;
   soft403 := 0;
   attempts := fRetries + 1;
   for attempt := 1 to attempts do begin
@@ -350,7 +373,7 @@ begin
     respStream.Position := 0;
     try
       statusCode := DoOnceToStream(method, url, requestBody, contentType,
-        respStream, sendAuth, xhr, contentDisposition);
+        respStream, sendAuth, xhr, contentDisposition, retryAfterMs);
       if statusCode >= 400 then
         raise EMagicHttpError.Create(
           Format('HTTP %d for %s', [statusCode, RedactUrl(url)]), statusCode);
@@ -366,18 +389,26 @@ begin
         if throttle403 then begin
           Inc(soft403);
           if soft403 > SOFT_403_MAX_RETRIES then
-            raise EMagicError.CreateFmt('Request refused with HTTP %d. %s',
-              [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]);
-          fLog.Info('Access denied while throttled; treating HTTP 403 as a '
-            + 'rate-limit signal and backing off.');
+            raise EMagicHttpError.Create(
+              Format('Request refused with HTTP %d. %s',
+                [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]), e.StatusCode);
+          fLog.Info('Access denied while throttled; retrying HTTP 403 a few '
+            + 'times with a short backoff in case it is load.');
         end
         else if IsTerminalStatus(e.StatusCode) then
-          raise EMagicError.CreateFmt('Request refused with HTTP %d. %s',
-            [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]);
+          raise EMagicHttpError.Create(
+            Format('Request refused with HTTP %d. %s',
+              [e.StatusCode, TerminalStatusAdvice(e.StatusCode)]), e.StatusCode);
         if attempt = attempts then
           break;
-        if (e.StatusCode = HTTP_TOO_MANY_REQUESTS) or throttle403 then
-          delay := fPacer.NoteRateLimited(attempt)
+        { Only a real 429 ratchets the shared pace and pauses every job: that is
+          the one signal the server gives for load. A 403 is almost always a
+          genuine denial (an unowned or bundle-entitlement item, an expired
+          download secret), so it retries on a short local backoff and never
+          inflates the global rate-limit state, where a run of expected 403s
+          would otherwise drive the whole run to the slow cap. }
+        if e.StatusCode = HTTP_TOO_MANY_REQUESTS then
+          delay := fPacer.NoteRateLimited(attempt, retryAfterMs)
         else
           delay := fPacer.OrdinaryRetryDelay(attempt);
         fLog.Info(Format('Retrying (%d/%d) in %ds.',

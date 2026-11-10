@@ -82,6 +82,7 @@ const
   HTTP_TOO_MANY_REQUESTS: LongInt = 429;
   HTTP_REQUEST_TIMEOUT: LongInt = 408;
   HTTP_FORBIDDEN: LongInt = 403;
+  HTTP_GONE: LongInt = 410;
 
 type
   {** How much a request must be spaced out from the previous one. pcLight is for
@@ -117,8 +118,11 @@ type
     procedure NoteSuccess;
 
     {** Reacts to a 429: pushes back the shared pause and slows the pace down.
-      Returns the delay, in ms, the caller should sleep before retrying. }
-    function NoteRateLimited(attempt: LongInt): Int64;
+      Returns the delay, in ms, the caller should sleep before retrying. When the
+      server sent a Retry-After, serverDelayMs carries it (0 when absent) and is
+      honoured in place of the computed backoff, so the pause matches what the
+      server asked for rather than a blind guess. }
+    function NoteRateLimited(attempt: LongInt; serverDelayMs: Int64): Int64;
 
     {** Exponential backoff with jitter for an ordinary (non-429) retry. }
     function OrdinaryRetryDelay(attempt: LongInt): Int64;
@@ -240,11 +244,18 @@ begin
   fLog.Debug(Format('Speeding up to one request every %dms.', [newInterval]));
 end;
 
-function TPacer.NoteRateLimited(attempt: LongInt): Int64;
+function TPacer.NoteRateLimited(attempt: LongInt; serverDelayMs: Int64): Int64;
 var
   delay, until_, newInterval: Int64;
 begin
-  delay := ComputeDelay(RATE_LIMIT_BASE_DELAY_MS, attempt);
+  if serverDelayMs > 0 then begin
+    { Honour the server's own figure, capped so a stray value cannot stall the
+      run, and with jitter added so parallel jobs do not resume in lockstep. }
+    delay := MinI64(serverDelayMs, RETRY_MAX_DELAY_MS);
+    delay := Round(delay * (1 + Random * RETRY_JITTER_RATIO));
+  end
+  else
+    delay := ComputeDelay(RATE_LIMIT_BASE_DELAY_MS, attempt);
 
   { Hold back every other job too, and never shorten a pause set by another. }
   until_ := NowMs + delay;
