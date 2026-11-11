@@ -246,8 +246,8 @@ begin
   Writeln('  --max-owned <n>            reorganize --hash: skip a host owning over n items');
   Writeln('  --json                     Machine-readable output (status/list/details/');
   Writeln('                             verify/blacklist/allow/relocate/forget)');
-  Writeln(Format('  --interval-ms <n>          Base delay between requests (default %d)',
-    [DEFAULT_REQUEST_INTERVAL_MS]));
+  Writeln(Format('  --interval-ms <n>          Base delay between requests (backend default,'
+    + ' else %d)', [DEFAULT_REQUEST_INTERVAL_MS]));
   Writeln('  --retries <n>              Retries per request (default 5)');
   Writeln('  --timeout-ms <n>           Per-request timeout (default 30000)');
   Writeln('  --user-agent <s>           HTTP User-Agent (default magicdl/<version>)');
@@ -473,15 +473,34 @@ begin
     Result := 'magicdl/' + APP_VERSION;
 end;
 
+{** The base request interval for this run, in milliseconds. Precedence:
+  --interval-ms, then the config interval-ms (the backend's [backend.<name>]
+  section before [general]), then the backend's own default (a store that
+  throttles a fast client paces itself slower), then the program default. }
+function ResolveIntervalMs: Int64;
+var
+  bc: TMagicBackendClass;
+  v: string;
+begin
+  v := ArgValue('--interval-ms', '');
+  if v = '' then
+    v := gConfig.Get(ArgValue('--backend', ''), 'interval-ms', '');
+  if v <> '' then begin
+    ResolveIntervalMs := StrToInt64Def(v, DEFAULT_REQUEST_INTERVAL_MS);
+    exit;
+  end;
+  bc := FindBackend(ArgValue('--backend', ''));
+  if (bc <> nil) and (bc.DefaultIntervalMs > 0) then
+    ResolveIntervalMs := bc.DefaultIntervalMs
+  else
+    ResolveIntervalMs := DEFAULT_REQUEST_INTERVAL_MS;
+end;
+
 {** Builds the shared services from the command-line options. }
 function OpenSession: TSession;
 begin
   Result.cookies := TCookieJar.Create;
-  { CLI wins, then the config [general] section, then the built-in default. }
-  Result.pacer := TPacer.Create(gLog,
-    StrToInt64Def(ArgValue('--interval-ms', ''),
-      StrToInt64Def(gConfig.Get('', 'interval-ms', ''),
-        DEFAULT_REQUEST_INTERVAL_MS)));
+  Result.pacer := TPacer.Create(gLog, ResolveIntervalMs);
   Result.http := TMagicHttp.Create(gLog, Result.pacer, Result.cookies,
     StrToIntDef(ArgValue('--retries', ''),
       StrToIntDef(gConfig.Get('', 'retries', ''), 5)),

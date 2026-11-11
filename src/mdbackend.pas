@@ -66,6 +66,12 @@ type
       non-browser client overrides this. }
     class function DefaultUserAgent: string; virtual;
 
+    {** A backend-specific base request interval, in milliseconds, used when the
+      run sets none of its own (no --interval-ms and no config interval-ms). A
+      value of 0 means "use the program default". A store that throttles a fast
+      client overrides this with a slower pace that avoids the throttle. }
+    class function DefaultIntervalMs: Int64; virtual;
+
     {** Confirms the supplied credentials work and any one-time setup is done.
       Raises EMagicError on failure. }
     procedure Authenticate; virtual; abstract;
@@ -187,6 +193,11 @@ end;
 class function TMagicBackend.DefaultUserAgent: string;
 begin
   DefaultUserAgent := '';
+end;
+
+class function TMagicBackend.DefaultIntervalMs: Int64;
+begin
+  DefaultIntervalMs := 0;  { 0 means use the program default }
 end;
 
 function TMagicBackend.AccountLabel: string;

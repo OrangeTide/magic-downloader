@@ -414,7 +414,13 @@ Machine\-readable output for
 .BR status ", " list ", " details ", " verify ", " blacklist ", " allow ", " relocate ", and " forget .
 .TP
 .BI "\-\-interval\-ms " n
-Base delay between requests. Default 3000.
+Base delay between requests, in milliseconds. When unset, the value comes from
+the config
+.I interval\-ms
+key (the backend's section before
+.IR general ),
+then the backend's own default, then 3000. A backend that the store throttles
+hard sets a slower default: itch.io uses 7500.
 .TP
 .BI "\-\-retries " n
 Retries per request. Default 5.
@@ -602,9 +608,10 @@ and backed off after an HTTP 429, honoring the server's
 when it sends one. Only a 429 slows the shared pace; an HTTP 403 is treated as a
 per\-request denial, so a run of expected 403s does not drag the whole run down.
 A short\-lived download link that expires before it is fetched (seen as a 403 or
-410 on an owned item) is re\-minted and retried. The defaults are conservative;
+410 on an owned item) is re\-minted and retried. Each backend sets its own base
+pace to suit the store (itch.io starts slower, at 7.5s between requests);
 .B \-\-interval\-ms
-sets a faster base pace when an account tolerates it.
+overrides it, faster when an account tolerates it or slower when it does not.
 .SH CONCURRENCY
 Runs for different backends, or for the same backend on separate index files,
 are independent and may run at once: the index is keyed by backend, so they

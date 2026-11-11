@@ -60,6 +60,7 @@ type
   public
     class function BackendName: string; override;
     class function CookieHost: string; override;
+    class function DefaultIntervalMs: Int64; override;
     procedure Authenticate; override;
     function AccountLabel: string; override;
     function ItemSubdir(const item: TCollectionItem): string; override;
@@ -110,6 +111,14 @@ begin
     cannot download items whose entitlement lives in that session. The leading
     dot matches how Firefox stores the domain cookie. }
   CookieHost := '.itch.io';
+end;
+
+class function TItchIoBackend.DefaultIntervalMs: Int64;
+begin
+  { itch.io throttles aggressively and recovers slowly. A faster pace triggers
+    429s early in a run, so start at 7.5s between requests. Tested against the
+    store; override with --interval-ms. }
+  DefaultIntervalMs := 7500;
 end;
 
 procedure TItchIoBackend.Authenticate;
