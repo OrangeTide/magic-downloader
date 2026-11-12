@@ -47,6 +47,10 @@ type
     {** Fetches one product by id and caches its file list, so a restricted sync
       can resolve without listing the whole library. }
     procedure FetchProduct(const orderProductId: string);
+    {** A token-authenticated GET that recovers from an expired token. On an HTTP
+      401 it re-authenticates once (minting a fresh token) and retries, so a long
+      run outlasting the token's lifetime keeps going rather than failing. }
+    function GetAuthed(const url: string; pacing: TPacing): string;
     {** Runs prepare then polls check until the file is ready; returns its
       download URL, or '' when it never became ready. }
     function PrepareFileUrl(const orderProductId: string; index: LongInt): string;
@@ -256,7 +260,7 @@ begin
     page := 1;
     while true do begin
       { Listing is cheap and once per run: light pacing. }
-      respText := fCtx.http.Get(BASE_URL + Format(
+      respText := GetAuthed(BASE_URL + Format(
         'order_products?getChecksum=1&getFilters=0&page=%d&pageSize=%d' +
         '&library=1&archived=0', [page, PAGE_SIZE]), pcLight);
       data := GetJSON(respText);
@@ -324,7 +328,7 @@ var
   data: TJSONData;
   attrs: TJSONObject;
 begin
-  respText := fCtx.http.Get(BASE_URL + 'order_products/' + orderProductId +
+  respText := GetAuthed(BASE_URL + 'order_products/' + orderProductId +
     '?getChecksum=1', pcNormal);
   data := GetJSON(respText);
   try
@@ -337,6 +341,24 @@ begin
   end;
 end;
 
+function TDriveThruRpgBackend.GetAuthed(const url: string;
+  pacing: TPacing): string;
+begin
+  try
+    GetAuthed := fCtx.http.Get(url, pacing);
+  except
+    on e: EMagicHttpError do begin
+      if e.StatusCode <> HTTP_UNAUTHORIZED then
+        raise;
+      { The token expired during a long run. Mint a fresh one and retry once;
+        a second 401 is a real credential problem and propagates. }
+      fCtx.log.Info('DriveThruRPG token rejected (401); re-authenticating.');
+      Authenticate;
+      GetAuthed := fCtx.http.Get(url, pacing);
+    end;
+  end;
+end;
+
 function TDriveThruRpgBackend.PrepareFileUrl(const orderProductId: string;
   index: LongInt): string;
 var
@@ -344,14 +366,14 @@ var
   polls: LongInt;
 begin
   { Kick off preparation, then poll until the file is no longer "Preparing". }
-  respText := fCtx.http.Get(BASE_URL + Format(
+  respText := GetAuthed(BASE_URL + Format(
     'order_products/%s/prepare?siteId=%d&index=%d&getChecksums=0',
     [orderProductId, DEFAULT_SITE, index]), pcNormal);
   ParsePrepareResponse(respText, url, status);
 
   polls := 0;
   while (Pos('Preparing', status) = 1) and (polls < MAX_PREPARE_POLLS) do begin
-    respText := fCtx.http.Get(BASE_URL + Format(
+    respText := GetAuthed(BASE_URL + Format(
       'order_products/%s/check?siteId=%d&index=%d&getChecksums=0',
       [orderProductId, DEFAULT_SITE, index]), pcNormal);
     ParsePrepareResponse(respText, url, status);

@@ -81,6 +81,7 @@ const
 
   HTTP_TOO_MANY_REQUESTS: LongInt = 429;
   HTTP_REQUEST_TIMEOUT: LongInt = 408;
+  HTTP_UNAUTHORIZED: LongInt = 401;
   HTTP_FORBIDDEN: LongInt = 403;
   HTTP_GONE: LongInt = 410;
 

@@ -479,6 +479,9 @@ by the product folder name as long as that name is unique in the library.
 Needs a browser User\-Agent for the watermark download portal, which the backend
 sends by default (override with
 .BR \-\-user\-agent ).
+The application key is exchanged for a short\-lived token at the start of a run;
+a long sync that outlives the token re\-authenticates on an HTTP 401 and
+continues, so a large library downloads in one pass.
 .TP
 .B itchio
 Games, tools, and assets. Authenticates with an API key from
