@@ -499,6 +499,47 @@ an MD5 per file, which is what the comparison uses. Bandcamp offers no per-file
 hash and its albums are unpacked on download, so for Bandcamp `check` confirms
 that an item's files are present rather than hashing them.
 
+## Automation
+
+A short wrapper script per backend turns a sync into one command you can run by
+hand or from cron. The [`examples/`](examples/) directory has a starting point
+for each backend; copy one, edit the output directory (and the Bandcamp fan
+handle), and run it. They are public domain, so adapt them freely.
+
+ * [`examples/drivethrurpg-sync.sh`](examples/drivethrurpg-sync.sh) — indexes
+   and adopts an existing library on first run (so it does not re-download what
+   you already have), then syncs. Safe to re-run for new purchases.
+ * [`examples/bandcamp-sync.sh`](examples/bandcamp-sync.sh) — syncs as Vorbis
+   with cover art, using your Firefox session.
+ * [`examples/itchio-sync.sh`](examples/itchio-sync.sh) — syncs with the web
+   session loaded, so bundle items download too.
+
+For example, the DriveThruRPG wrapper is:
+
+```sh
+#!/bin/sh
+set -e
+OUT="$HOME/DriveThruRPG"
+MARKER="$HOME/.config/magicdl/.drivethrurpg-imported"
+
+# One-time: index the library and adopt what is already on disk, so the first
+# sync does not refetch it. Remove this block if starting from an empty dir.
+if [ ! -f "$MARKER" ]; then
+  magicdl index  --backend drivethrurpg
+  magicdl import --backend drivethrurpg "$OUT"
+  mkdir -p "$(dirname "$MARKER")"
+  touch "$MARKER"
+fi
+
+# Download anything new or missing. Extra arguments pass through.
+magicdl sync --backend drivethrurpg --out "$OUT" "$@"
+```
+
+The key comes from the keyring (`magicdl key set --backend drivethrurpg`), so
+the script carries no secret. Pass extra flags through, for example
+`drivethrurpg-sync.sh --dry-run` to preview or `--timeout-ms 120000` to give
+large files more time.
+
 ## How it stores things
 
 The index is a SQLite database with three levels:
@@ -551,10 +592,23 @@ files are not touched; a later `verify` re-checks them and marks what is present
 ## Rate limiting
 
 Some stores are quick to rate limit and slow to forgive. The tool spaces its
-requests out and backs off when a store answers with HTTP 429. The defaults are
-deliberately conservative. `--interval-ms <n>` sets the base delay between
-requests if an account tolerates a faster pace. A large library still takes a
-while to list, since listing is paginated.
+requests out and backs off when a store answers with HTTP 429, honoring the
+server's `Retry-After` when it sends one. Only a 429 slows the shared pace; an
+HTTP 403 is treated as a per-request denial, so a run of expected 403s (for
+example session-gated items) does not drag the whole run down. A short-lived
+download link that expires before it is fetched is re-minted and retried.
+
+Each backend sets its own base pace to suit the store, since they tolerate very
+different rates. itch.io throttles hard and starts slower (7.5s between
+requests); the others start at 3s. `--interval-ms <n>` overrides the base delay,
+faster when an account tolerates it or slower when it does not, and the config
+`interval-ms` key sets it per backend. A large library still takes a while to
+list, since listing is paginated.
+
+DriveThruRPG exchanges your application key for a short-lived token at the start
+of a run. A library of several thousand products takes hours to download and can
+outlive that token, so magicdl re-authenticates on an expired token and keeps
+going, letting a full sync finish in one pass.
 
 ## Version
 
